@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Languages offered in Android 13+ Settings › Apps › IA Mode › Language -->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="en" />
+    <locale android:name="te" />
+    <locale android:name="hi" />
+</locale-config>

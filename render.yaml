@@ -1,0 +1,25 @@
+# Render Blueprint: New > Blueprint > pick this repo. Secrets are entered in the dashboard, never committed.
+services:
+  - type: web
+    name: ia-mode-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore
+    healthCheckPath: /v1/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: AUTH_MODE
+        value: firebase
+      - key: FIREBASE_PROJECT_ID
+        value: ia-mode-509514
+      - key: GEMINI_MODEL_FAST
+        value: gemini-3.5-flash-lite
+      - key: GEMINI_MODEL_WRITER
+        value: gemini-3.5-flash
+      - key: GEMINI_MODEL_FALLBACK
+        value: gemini-3.5-flash-lite
+      - key: GEMINI_API_KEY
+        sync: false

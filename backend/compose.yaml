@@ -1,0 +1,42 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ia-mode-api:local
+    # Local Compose always reads backend/.env. Production deployment supplies its
+    # environment through the hosting platform; never switch this command to a second env file.
+    env_file:
+      - .env
+    ports:
+      # Default to this machine only. Set BIND_ADDRESS=0.0.0.0 only when a
+      # phone on the same trusted Wi-Fi needs to reach the development API.
+      - "${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-8000}:8080"
+    init: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m
+    cpus: 1.0
+    stop_grace_period: 20s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '8080') + '/v1/health', timeout=5)"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"

@@ -1,0 +1,8 @@
+<resources>
+    <!-- Dark window background so there's no white flash between screens in dark mode -->
+    <style name="Theme.IAMode" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/background</item>
+    </style>
+</resources>

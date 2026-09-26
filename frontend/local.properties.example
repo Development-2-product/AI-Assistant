@@ -1,0 +1,19 @@
+# Copy these blank keys into the real ignored frontend/local.properties and fill them locally.
+# Values are embedded at APK build time. Changing an endpoint, token, or signing value requires a rebuild.
+# Debug may use http://LAN-IP:8000/ only on a trusted local Wi-Fi.
+# Release must use an HTTPS domain, never a LAN address or raw public IP.
+iamode.backendUrl=
+iamode.backendUrl.release=
+# Debug only. Must equal DEV_API_TOKEN in backend/.env when AUTH_MODE=dev.
+iamode.devToken=
+
+# Release signing (required only for release builds; never commit these values).
+RELEASE_STORE_FILE=
+RELEASE_STORE_PASSWORD=
+RELEASE_KEY_ALIAS=
+RELEASE_KEY_PASSWORD=
+
+# Outlook / Microsoft 365 (optional).
+iamode.msal.clientId=
+iamode.msal.signatureHash.debug=
+iamode.msal.signatureHash.release=

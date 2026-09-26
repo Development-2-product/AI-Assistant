@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">IA Mode</string>
+    <string name="widget_description">Turn IA Mode on or off and see chats that need you</string>
+</resources>

@@ -1,0 +1,2533 @@
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/CHANGELOG.md ia-mode/CHANGELOG.md
+--- a/CHANGELOG.md	2026-09-26 09:01:15.259445744 +0000
++++ b/CHANGELOG.md	2026-09-26 09:00:36.731843657 +0000
+@@ -1,5 +1,17 @@
+ # Changelog
+ 
++## 1.7.0 (job-application tracker, Indian-language email)
++
++- Job-application tracker: career emails create and update applications (applied → assessment → interview → selected →
++  offer / not selected / no response). Matching by thread, reference ID, company (from email or sender domain) and role;
++  stages only move forward from email. Funnel insights, timeline, notes, manual add, share a job from LinkedIn/Naukri.
++- Follow-ups: daily reminders (14 days after applying, 5 after an interview, max 2), deadline and offer reminders,
++  "no response" after 30 days. Follow-up emails are drafted and go through review → approval → send.
++- Indian languages in email: safety rules understand Hindi/Telugu/Tamil relative dates, reply requests and OTP scams;
++  drafts reply in the email's language and script (or a chosen language); style learning knows Indian greetings;
++  Hindi (Devanagari) OCR.
++- Database v6. Backend: application info + language in /v1/mail/intelligence; follow_up purpose + language in /v1/mail/reply-draft.
++
+ ## 1.6.0 (smarter documents, your writing style, premium motion)
+ 
+ - OCR for scanned PDFs and photos (ML Kit, on-device, model via Play services).
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/backend/app/prompts/mail_intelligence.md ia-mode/backend/app/prompts/mail_intelligence.md
+--- a/backend/app/prompts/mail_intelligence.md	2026-09-26 09:01:15.260368579 +0000
++++ b/backend/app/prompts/mail_intelligence.md	2026-09-26 08:51:58.290621839 +0000
+@@ -49,6 +49,16 @@
+ and say why in ambiguity_reason. Never invent a date, time, timezone or duration.
+ 
+ OPPORTUNITY: company and role only as written; status selected/interview/offer/applied/recruiter_contact/rejected/none.
++A rejection ("we regret", "not moving forward", "other candidates") is primary_category application with status rejected.
++
++APPLICATION (job tracker): fill application for career emails. stage: applied (application received/submitted),
++assessment (test, coding challenge, assignment), interview, selected, offer, rejected, or none. reference_id only if an
++application/requisition number is written. interview_round only if stated ("second round" = 2). deadline as YYYY-MM-DD
++only if a date is stated for the next step. next_step: one short phrase if the email says what happens next.
++
++LANGUAGE: emails may be in English, Telugu, Hindi, Tamil, Kannada, Malayalam or mixed/romanized. Understand them fully.
++Set language to the email's ISO code (en, te, hi, ta, kn, ml, mr, bn). Always write summary in English.
++Relative dates in any language ("రేపు", "कल", "next Friday") are ambiguous: never convert them to a date.
+ 
+ SUSPICIOUS: list concrete reasons only (mismatched domains, requests for passwords/OTP/bank details, impersonation of a
+ known organisation from an unrelated domain, unexpected executable attachments). Never state fraud or malware as fact.
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/backend/app/prompts/mail_reply.md ia-mode/backend/app/prompts/mail_reply.md
+--- a/backend/app/prompts/mail_reply.md	2026-09-26 09:01:15.260344448 +0000
++++ b/backend/app/prompts/mail_reply.md	2026-09-26 08:51:58.290786691 +0000
+@@ -19,6 +19,8 @@
+ The samples above are the user's own past emails, for style only. Never copy facts, names or numbers from them.
+ $style_instruction
+ 
++LANGUAGE: $language_instruction
++
+ Purpose: $purpose_instruction
+ Tone: $tone
+ $attachment_instruction
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/backend/app/schemas/mail.py ia-mode/backend/app/schemas/mail.py
+--- a/backend/app/schemas/mail.py	2026-09-26 09:01:15.260527750 +0000
++++ b/backend/app/schemas/mail.py	2026-09-26 08:51:33.433212639 +0000
+@@ -81,6 +81,20 @@
+     status: OpportunityStatus = "none"
+ 
+ 
++ApplicationStage = Literal["applied", "assessment", "interview", "selected", "offer", "rejected", "none"]
++
++
++class ApplicationInfo(BaseModel):
++    """Job-application details for the tracker. Only what the email states."""
++
++    stage: ApplicationStage = "none"
++    reference_id: str | None = Field(default=None, max_length=80)     # requisition / application number
++    ats_platform: str | None = Field(default=None, max_length=40)     # workday, greenhouse, naukri… (set by rules)
++    interview_round: int | None = Field(default=None, ge=1, le=10)
++    deadline: str | None = Field(default=None, max_length=10)         # YYYY-MM-DD, only if stated
++    next_step: str | None = Field(default=None, max_length=200)
++
++
+ class MailIntelligence(BaseModel):
+     primary_category: MailCategory = "general"
+     labels: list[MailCategory] = Field(default_factory=list, max_length=6)
+@@ -94,6 +108,8 @@
+     document_request: DocumentRequest | None = None
+     calendar: CalendarExtraction | None = None
+     opportunity: Opportunity | None = None
++    application: ApplicationInfo | None = None
++    language: str | None = Field(default=None, max_length=10)  # ISO code of the email's language, e.g. en, te, hi
+     suspicious_reasons: list[str] = Field(default_factory=list, max_length=5)
+     recommended_action: RecommendedAction = "review"
+     celebration: Celebration = "none"
+@@ -124,7 +140,9 @@
+     body: str = Field(max_length=12000)
+     thread_context: list[str] = Field(default_factory=list, max_length=6)
+     user_name: str = Field(default="", max_length=80)
+-    purpose: Literal["reply", "send_document", "confirm_interview", "unsubscribe"] = "reply"
++    purpose: Literal["reply", "send_document", "confirm_interview", "unsubscribe", "follow_up"] = "reply"
++    # Reply language: "auto" follows the email's language and script; otherwise an ISO code (en, te, hi, ta, kn, ml…)
++    language: str = Field(default="auto", max_length=10)
+     tone: Literal["professional", "friendly", "formal", "brief"] = "professional"
+     attachment_names: list[str] = Field(default_factory=list, max_length=10)
+     instructions: str | None = Field(default=None, max_length=300)  # typed by the user, e.g. "say I'll join"
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/backend/app/services/assistant.py ia-mode/backend/app/services/assistant.py
+--- a/backend/app/services/assistant.py	2026-09-26 09:01:15.260876373 +0000
++++ b/backend/app/services/assistant.py	2026-09-26 08:51:58.291084490 +0000
+@@ -166,7 +166,16 @@
+             "send_document": "Reply that the requested document is attached, briefly and politely.",
+             "confirm_interview": "Confirm the user's availability for the interview as scheduled in the email.",
+             "unsubscribe": "Ask to be removed from this mailing list. One or two sentences.",
++            "follow_up": "Politely follow up on the user's job application or interview: restate interest in the role, "
++                         "ask about the status or next steps. Short, warm and professional. Don't sound impatient.",
+         }[req.purpose]
++        language_instruction = (
++            "Write in the same language and script as the email. Formal English emails get English replies; if the email "
++            "is in Telugu, Hindi or another Indian language (native script or romanized), reply the same way."
++            if req.language == "auto" else
++            f"Write the reply in the language with ISO code '{req.language}', in its native script, "
++            "keeping names, company names and technical terms as written."
++        )
+         attachment = (f"The user is attaching: {', '.join(req.attachment_names)}. Mention the attachment naturally."
+                       if req.attachment_names else "No file is attached. Never say something is attached.")
+         st = req.style
+@@ -185,7 +194,8 @@
+             lo, hi, style_instruction, sign_off, samples = 40, 140, "", f"Regards,\n{name}", "[none]"
+         prompt = render(
+             "mail_reply", user_name=name, style_samples=re.sub(r"</?\s*style_samples\s*>", "", samples, flags=re.I),
+-            style_instruction=style_instruction, sign_off=sign_off, length_range=f"{lo}-{hi}", from_name=req.from_name or "",
++            style_instruction=style_instruction, sign_off=sign_off, length_range=f"{lo}-{hi}",
++            language_instruction=language_instruction, from_name=req.from_name or "",
+             from_address=req.from_address, subject=_fence(req.subject), body=_fence(req.body),
+             thread_context=_fence("\n---\n".join(req.thread_context[-6:])) or "[none]",
+             purpose_instruction=purpose, tone=req.tone, attachment_instruction=attachment,
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/backend/app/services/mail_rules.py ia-mode/backend/app/services/mail_rules.py
+--- a/backend/app/services/mail_rules.py	2026-09-26 09:01:15.260685775 +0000
++++ b/backend/app/services/mail_rules.py	2026-09-26 08:51:33.433529895 +0000
+@@ -7,25 +7,50 @@
+ from datetime import date
+ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+ 
+-from app.schemas.mail import CalendarExtraction, MailIntelligence, MailIntelligenceRequest, Opportunity
++from app.schemas.mail import ApplicationInfo, CalendarExtraction, MailIntelligence, MailIntelligenceRequest, Opportunity
+ 
+ AUTOMATED_SENDER = re.compile(r"(^|[._-])(no-?reply|do-?not-?reply|donotreply|notifications?|mailer-daemon|bounce)[._@-]", re.I)
+ EXPLICIT_REPLY_REQUEST = re.compile(
+     r"\b(please (reply|respond|confirm|let us know|get back)|reply to (this|confirm)|kindly (reply|confirm|revert|share|send)"
+     r"|confirm your (availability|attendance|participation|interest)|let us know (if|whether|your)|revert back"
+-    r"|awaiting your (reply|response|confirmation))\b", re.I)
++    r"|awaiting your (reply|response|confirmation))\b"
++    # Hindi / Telugu (native script and common romanized forms)
++    r"|कृपया (जवाब|उत्तर|पुष्टि)|जवाब दें|पुष्टि करें|बताएं|"
++    r"దయచేసి (సమాధానం|ధృవీకరించండి|తెలియజేయండి)|తెలియజేయండి|సమాధానం ఇవ్వండి|"
++    r"\b(jawab (dein|do)|confirm karein|batayein|reply cheyyandi|teliyajeyandi)\b", re.I)
+ CREDENTIAL_REQUEST = re.compile(
+     r"\b(verify your (account|identity)|confirm your password|enter your (password|pin|otp)|share (your )?(otp|password|pin|cvv)"
+-    r"|bank (account )?details|update your (kyc|billing|payment)|account (will be )?(suspended|locked|closed))\b", re.I)
+-URGENCY = re.compile(r"\b(immediately|within 24 hours|urgent(ly)?|final notice|act now|last warning)\b", re.I)
++    r"|bank (account )?details|update your (kyc|billing|payment)|account (will be )?(suspended|locked|closed))\b"
++    r"|ओटीपी|पासवर्ड (बताएं|भेजें|दर्ज)|केवाईसी (अपडेट|पूरा)|खाता (बंद|ब्लॉक)|"
++    r"ఓటీపీ|పాస్‌?వర్డ్|కేవైసీ|ఖాతా (బ్లాక్|నిలిపివేయ)|"
++    r"\b(otp (batao|bhejo|share karo|cheppandi)|kyc update (karo|cheyyandi))\b", re.I)
++URGENCY = re.compile(r"\b(immediately|within 24 hours|urgent(ly)?|final notice|act now|last warning)\b|तुरंत|तत्काल|వెంటనే|అత్యవసరం", re.I)
+ RELATIVE_DATE = re.compile(
+     r"\b(today|tonight|tomorrow|day after|next|this (mon|tue|wed|thu|fri|sat|sun|week|coming)|coming (mon|tue|wed|thu|fri|sat|sun)"
+-    r"|in \d+ days?|asap|soon|early next|later this)\w*", re.I)
++    r"|in \d+ days?|asap|soon|early next|later this)\w*"
++    # Hindi: aaj, kal, parson, agle/is (hafte|somvar…); Telugu: ఈరోజు, రేపు, ఎల్లుండి, వచ్చే…, ఈ వారం; Tamil: இன்று, நாளை, அடுத்த
++    r"|आज|कल|परसों|अगले|अगली|इस (हफ्ते|सप्ताह|सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार)"
++    r"|ఈరోజు|ఈ రోజు|రేపు|ఎల్లుండి|వచ్చే|ఈ వారం|இன்று|நாளை|அடுத்த"
++    r"|\b(aaj|kal|parson|agle|agli|repu|ellundi|vachhe|vache|naalai)\b", re.I)
+ DANGEROUS_EXT = (".exe", ".scr", ".bat", ".cmd", ".js", ".vbs", ".jar", ".apk", ".msi", ".iso", ".lnk", ".ps1", ".hta")
+ DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+ TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+ FREE_MAIL = {"gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "live.com", "icloud.com", "proton.me", "rediffmail.com"}
+ 
++# Job platforms (applicant tracking systems and job boards) by sender domain
++ATS_DOMAINS = {
++    "greenhouse.io": "greenhouse", "greenhouse-mail.io": "greenhouse", "lever.co": "lever", "myworkday.com": "workday",
++    "myworkdayjobs.com": "workday", "workday.com": "workday", "icims.com": "icims", "smartrecruiters.com": "smartrecruiters",
++    "ashbyhq.com": "ashby", "jobvite.com": "jobvite", "taleo.net": "taleo", "successfactors.com": "successfactors",
++    "naukri.com": "naukri", "linkedin.com": "linkedin", "indeed.com": "indeed", "instahyre.com": "instahyre",
++    "foundit.in": "foundit", "internshala.com": "internshala", "wellfound.com": "wellfound", "hirist.tech": "hirist",
++    "iimjobs.com": "iimjobs", "cutshort.io": "cutshort", "unstop.com": "unstop", "hackerrank.com": "hackerrank",
++    "hackerearth.com": "hackerearth", "codility.com": "codility", "mettl.com": "mettl",
++}
++STAGE_FOR_CATEGORY = {
++    "application": "applied", "interview_invitation": "interview", "job_selection": "selected", "job_offer": "offer",
++}
++
+ CELEBRATION_FOR = {
+     "job_selection": "selection", "job_offer": "offer", "interview_invitation": "interview",
+ }
+@@ -177,12 +202,37 @@
+     if m.primary_category == "interview_invitation":
+         m.priority = "high"
+ 
++    # ---- job application (tracker) ----
++    sender_domain = _domain(req.from_address)
++    ats = next((name for d, name in ATS_DOMAINS.items() if sender_domain and (sender_domain == d or sender_domain.endswith("." + d))), None)
++    career_mail = m.primary_category in STAGE_FOR_CATEGORY or m.primary_category in {"recruitment", "opportunity"} or \
++        (m.opportunity is not None and m.opportunity.status != "none")
++    if career_mail or m.application:
++        app = m.application or ApplicationInfo()
++        if app.stage == "none":
++            app.stage = STAGE_FOR_CATEGORY.get(m.primary_category, "none")
++        if m.opportunity and m.opportunity.status == "rejected":
++            app.stage = "rejected"
++        if app.stage == "rejected" and m.opportunity:
++            m.opportunity.status = "rejected"
++        app.ats_platform = ats or app.ats_platform
++        if app.deadline:
++            try:
++                d = date.fromisoformat(app.deadline)
++                if received and d < received:
++                    app.deadline = None
++            except ValueError:
++                app.deadline = None
++        m.application = app if (app.stage != "none" or app.reference_id or ats) else None
++
+     # ---- celebration: clear, positive, trustworthy only ----
+     wanted = CELEBRATION_FOR.get(m.primary_category)
+     if m.primary_category == "application" and m.opportunity and m.opportunity.status == "applied" and m.celebration == "application":
+         wanted = "application"
+     if m.primary_category == "congratulations" and m.celebration == "congratulations":
+         wanted = "congratulations"
++    if m.application and m.application.stage == "rejected":
++        wanted = None  # never celebrate a rejection
+     if m.suspicious_reasons or m.primary_category == "promotion" or m.confidence == "low" or (automated and wanted == "congratulations"):
+         wanted = None
+     m.celebration = wanted or "none"
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/backend/tests/test_mail.py ia-mode/backend/tests/test_mail.py
+--- a/backend/tests/test_mail.py	2026-09-26 09:01:15.260982403 +0000
++++ b/backend/tests/test_mail.py	2026-09-26 08:51:58.291084490 +0000
+@@ -209,3 +209,71 @@
+     out = classify(client, fake_llm, MailIntelligence(primary_category="interview_invitation"),
+                    mail("Interview on Monday", sender="jobs@abc.com", sender_history_total=8, sender_history_bulk=8))
+     assert out["primary_category"] == "interview_invitation"
++
++
++# ---------------- v1.7: job tracker + Indian languages ----------------
++from app.schemas.mail import ApplicationInfo  # noqa: E402
++
++
++def test_platform_sender_sets_ats_and_stage(client, fake_llm):
++    ai = MailIntelligence(primary_category="application", opportunity=Opportunity(company="Wipro", role="Java Developer"))
++    out = classify(client, fake_llm, ai, mail("Thank you for applying to Wipro.", sender="no-reply@wipro.myworkdayjobs.com"))
++    assert out["application"]["stage"] == "applied" and out["application"]["ats_platform"] == "workday"
++
++
++def test_rejection_is_tracked_and_never_celebrates(client, fake_llm):
++    ai = MailIntelligence(primary_category="application", celebration="application", confidence="high",
++                          opportunity=Opportunity(company="ABC", role="Dev", status="rejected"))
++    out = classify(client, fake_llm, ai, mail("We regret to inform you that we are moving forward with other candidates."))
++    assert out["application"]["stage"] == "rejected" and out["celebration"] == "none"
++
++
++def test_interview_stage_round_and_past_deadline_dropped(client, fake_llm):
++    ai = MailIntelligence(primary_category="interview_invitation", application=ApplicationInfo(interview_round=2, deadline="2026-01-01",
++                          reference_id="REQ-4521"))
++    out = classify(client, fake_llm, ai, mail("Second round interview for REQ-4521"))
++    app = out["application"]
++    assert app["stage"] == "interview" and app["interview_round"] == 2 and app["reference_id"] == "REQ-4521"
++    assert app["deadline"] is None  # before the email was received
++
++
++def test_non_career_mail_has_no_application(client, fake_llm):
++    out = classify(client, fake_llm, MailIntelligence(primary_category="general"), mail("Lunch tomorrow?", sender="ravi@gmail.com"))
++    assert out["application"] is None
++
++
++def test_telugu_relative_date_is_ambiguous(client, fake_llm):
++    ai = MailIntelligence(primary_category="interview_invitation", calendar=CalendarExtraction(
++        date="2026-09-26", start_time="10:00", date_text="రేపు ఉదయం 10 గంటలకు"))
++    out = classify(client, fake_llm, ai, mail("రేపు ఉదయం 10 గంటలకు ఇంటర్వ్యూ ఉంది."))
++    assert out["calendar"]["ambiguous"] is True and out["calendar"]["date"] is None
++
++
++def test_hindi_relative_date_is_ambiguous(client, fake_llm):
++    ai = MailIntelligence(primary_category="interview_invitation", calendar=CalendarExtraction(
++        date="2026-10-02", start_time="14:00", date_text="अगले शुक्रवार दोपहर 2 बजे"))
++    out = classify(client, fake_llm, ai, mail("अगले शुक्रवार दोपहर 2 बजे इंटरव्यू है।"))
++    assert out["calendar"]["ambiguous"] is True and out["calendar"]["date"] is None
++
++
++def test_hindi_otp_scam_is_suspicious(client, fake_llm):
++    out = classify(client, fake_llm, MailIntelligence(), mail("आपका खाता बंद हो जाएगा। तुरंत ओटीपी बताएं।", sender="alert@bank.com"))
++    assert any("passwords, codes" in r for r in out["suspicious_reasons"])
++
++
++def test_telugu_reply_request_from_automated_sender_keeps_reply(client, fake_llm):
++    ai = MailIntelligence(primary_category="reply_needed", requires_reply=True)
++    out = classify(client, fake_llm, ai, mail("దయచేసి మీ హాజరును తెలియజేయండి.", sender="no-reply@college.edu",
++                                              reply_to="office@college.edu"))
++    assert out["requires_reply"] is True
++
++
++def test_follow_up_draft_and_language_instruction(client, fake_llm):
++    draft(client, fake_llm, "Hello,\n\nI wanted to follow up.\n\nRegards,\nKasi", purpose="follow_up")
++    p = fake_llm.prompts[-1]
++    assert "follow up on the user's job application" in p and "same language and script as the email" in p
++
++
++def test_explicit_reply_language(client, fake_llm):
++    draft(client, fake_llm, "నమస్కారం,\n\nసరే.\n\nధన్యవాదాలు,\nకాశీ", language="te")
++    assert "ISO code 'te'" in fake_llm.prompts[-1]
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/docs/CHANGES_v1.7.md ia-mode/docs/CHANGES_v1.7.md
+--- a/docs/CHANGES_v1.7.md	1970-01-01 00:00:00.000000000 +0000
++++ b/docs/CHANGES_v1.7.md	2026-09-26 09:01:15.255894947 +0000
+@@ -0,0 +1,92 @@
++# IA Mode v1.7.0 — what changed and where
++
++**How to apply:** unzip `ia-mode-v1.7-changes.zip` and copy its `ia-mode/` folder **over** your project folder
++(replace when asked). Every file inside is complete, so you replace whole files and don't edit lines by hand.
++Your `.git`, `.env`, `local.properties`, keystores and `google-services.json` files are untouched.
++`v1.7.patch` (next to this file) shows every changed line (unified diff) if you want to review it in Git or Android Studio.
++
++After copying: **Android Studio → File → Sync Project with Gradle Files**, then build. Backend: `pytest` (76 tests).
++
++## New files (11)
++
++| File | What it is |
++|---|---|
++| `frontend/app/src/main/java/com/iamode/app/domain/jobs/JobModels.kt` | Stages (Saved → Applied → Assessment → Interview → Selected → Offer / Accepted / Declined / Not selected / No response), event types, forward-only `StageMachine` |
++| `.../domain/jobs/ApplicationMatcher.kt` | Links an email to an application: same thread → reference ID → company (email or sender domain) + role. Jaro-Winkler fuzzy match, job-platform domains |
++| `.../domain/jobs/FollowUpPlanner.kt` | Daily reminders (14 days after applying, 5 after interview, max 2, deadlines, offers, 30-day no response) + funnel insights |
++| `.../domain/jobs/SharedJobParser.kt` | Parses text shared from LinkedIn/Naukri/Indeed into company, role, link |
++| `.../core/database/dao/JobApplicationDao.kt` | Room DAO for applications and timeline events |
++| `.../data/jobs/JobTrackerRepository.kt` | Tracker logic: career email → application, manual add, stage changes, notes, follow-up proposals |
++| `.../data/jobs/JobReminderWorker.kt` | Daily WorkManager job for reminders (never sends anything) |
++| `.../ui/feature/jobs/JobsDesign.kt` | Stage colours, glyphs, `StageChip`, `daysAgo` |
++| `.../ui/feature/jobs/ApplicationsScreen.kt` | Applications list, animated funnel, filters, Add / Track-shared-job sheet |
++| `.../ui/feature/jobs/ApplicationDetailScreen.kt` | Detail: stage picker, next step, Follow up, edit details, notes, timeline |
++| `frontend/app/src/test/java/com/iamode/app/domain/JobTrackerTest.kt` | 21 tests (stages, matching, reminders, funnel, shared links) |
++
++## Modified files (32) — what changed inside each
++
++### Backend
++| File | Change |
++|---|---|
++| `backend/app/schemas/mail.py` | + `ApplicationStage`, `ApplicationInfo` (stage, reference_id, ats_platform, interview_round, deadline, next_step) above `class MailIntelligence`; + `application`, `language` fields in `MailIntelligence`; `ReplyDraftRequest.purpose` + `"follow_up"`, + `language` field |
++| `backend/app/services/mail_rules.py` | Hindi/Telugu/Tamil patterns added to `EXPLICIT_REPLY_REQUEST`, `CREDENTIAL_REQUEST`, `URGENCY`, `RELATIVE_DATE`; + `ATS_DOMAINS`, `STAGE_FOR_CATEGORY`; new block `# ---- job application (tracker) ----` before the celebration block; rejections never celebrate |
++| `backend/app/services/assistant.py` | `draft_mail_reply`: + `"follow_up"` purpose text, + `language_instruction` passed to the prompt |
++| `backend/app/prompts/mail_intelligence.md` | + APPLICATION and LANGUAGE sections after OPPORTUNITY |
++| `backend/app/prompts/mail_reply.md` | + `LANGUAGE: $language_instruction` line before `Purpose:` |
++| `backend/tests/test_mail.py` | + 10 tests at the end (`# ---- v1.7 ...`) |
++
++### Android — database & settings
++| File | Change |
++|---|---|
++| `core/database/entity/Entities.kt` | + `JobApplicationEntity`, `ApplicationEventEntity` at the end |
++| `core/database/IAModeDatabase.kt` | `version = 6`; the 2 entities added to the list; `jobApplicationDao()`; + `MIGRATION_5_6` at the end of the companion |
++| `core/di/AppModule.kt` | `.addMigrations(... , MIGRATION_5_6)`; + `jobApplicationDao` provider |
++| `domain/model/UserSettings.kt` | + `mailReplyLanguage = "auto"`, `jobReminders = true` |
++| `core/datastore/PreferenceKeys.kt` | + `MAIL_REPLY_LANGUAGE`, `JOB_REMINDERS` |
++| `data/repository/SettingsRepositoryImpl.kt` | read/write the two new settings |
++| `core/network/dto/ApiDtos.kt` | + `ApplicationDto`; `MailIntelligenceDto` + `application`, `language`; `ReplyDraftRequestDto` + `language` |
++
++### Android — mail workflow
++| File | Change |
++|---|---|
++| `domain/mail/MailModels.kt` | `MailActionType` + `SEND_FOLLOW_UP` |
++| `domain/mail/MailPolicyEngine.kt` | `SEND_FOLLOW_UP` checked like every send (approval, expiry, recipient lock) |
++| `domain/mail/WritingStyle.kt` | Greeting/sign-off regexes know Telugu, Hindi, Tamil, Kannada, Malayalam |
++| `data/mail/MailIntelligenceRepository.kt` | constructor + `tracker`; in `classify()` a `// Job tracker:` block before `if (cal != null)`; `draftReply` sends `language` and maps `SEND_FOLLOW_UP → "follow_up"` |
++| `data/mail/MailActionExecutor.kt` | constructor + `tracker`; `SEND_FOLLOW_UP` sends like a reply; after success calls `tracker.onFollowUpSent` |
++| `data/mail/DocumentTextExtractor.kt` | + Devanagari recognizer; OCR falls back to it when Latin finds little text |
++
++### Android — UI, navigation, app
++| File | Change |
++|---|---|
++| `ui/navigation/AppNavHost.kt` | `DeepLink.Application`, `DeepLink.SharedJob` (Android share sheet); routes `APPLICATIONS`, `APPLICATION`; wiring from Mail and Opportunities |
++| `ui/feature/mail/MailHomeScreen.kt` | Work icon → Applications; label for `SEND_FOLLOW_UP` |
++| `ui/feature/mail/MailActionsScreen.kt` | card glyph/title for `SEND_FOLLOW_UP` |
++| `ui/feature/mail/OpportunitiesScreen.kt` | "All applications" button in the top bar |
++| `ui/feature/settings/EmailIntelligenceSection.kt` | "Reply language" picker and "Job tracker → Follow-up reminders" switch |
++| `MainActivity.kt` | + `EXTRA_APPLICATION_ID` |
++| `core/notifications/AppNotifier.kt` | + `jobReminder(...)` notification (opens the application) |
++| `IAModeApp.kt` | schedules `JobReminderWorker` with the mail sync |
++| `AndroidManifest.xml` | `MainActivity`: share-sheet `<intent-filter>` (SEND text/plain); OCR meta-data `ocr,ocr_devanagari` |
++| `app/build.gradle.kts` | versionCode 8 / 1.7.0; + Devanagari OCR dependency |
++| `gradle/libs.versions.toml` | + `mlkitDevanagariUnbundled`, `mlkit-text-recognition-devanagari` |
++| `test/.../MailWorkflowTest.kt` | + `IndianStyleTest` (Telugu + Hindi) |
++| `CHANGELOG.md` | 1.7.0 entry |
++
++## Database
++Version **6**. `MIGRATION_5_6` creates `job_applications` and `application_events` (existing data is untouched).
++Verified here by replaying the real v3 schema through migrations 3→4→5→6 in SQLite: 21 tables, 0 mismatches.
++
++## Tested here
++- Backend: **76 tests pass** (10 new).
++- Core app logic (pure Kotlin): **98 tests pass** (23 new: tracker, shared links, Indian-language style).
++- Android screens/data layer: static checks only (**not compiled here**, no Android SDK). Build in Android Studio.
++
++## Test on your phone
++1. Update over v1.6: the app opens and your mail/data is still there (migration 5→6).
++2. Email yourself "Thank you for applying for Android Developer at ABC" → Mail → Work icon → it appears as Applied.
++3. Reply in the same thread with an interview invite → the same application moves to Interview (not a duplicate).
++4. Share a LinkedIn job to IA Mode → "Track this job" pre-filled → Save.
++5. Application detail → Follow up → review the draft → Approve & Send → timeline shows "Follow-up sent".
++6. Email in Telugu with "రేపు 10 గంటలకు ఇంటర్వ్యూ" → the calendar asks you to confirm the date.
++7. Settings → Reply language → తెలుగు → drafts come in Telugu.
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/build.gradle.kts ia-mode/frontend/app/build.gradle.kts
+--- a/frontend/app/build.gradle.kts	2026-09-26 09:01:15.261507992 +0000
++++ b/frontend/app/build.gradle.kts	2026-09-26 09:00:36.716849235 +0000
+@@ -58,8 +58,8 @@
+         applicationId = "com.iamode.app"
+         minSdk = 29
+         targetSdk = 35
+-        versionCode = 7
+-        versionName = "1.6.0"
++        versionCode = 8
++        versionName = "1.7.0"
+         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+     }
+ 
+@@ -152,6 +152,8 @@
+     implementation(libs.pdfbox.android)
+     // On-device OCR for scanned PDFs and photos (model delivered by Play services, not bundled in the APK)
+     implementation(libs.mlkit.text.recognition)
++    // Hindi / Marathi (Devanagari) OCR, used when Latin OCR finds little text
++    implementation(libs.mlkit.text.recognition.devanagari)
+     implementation(libs.retrofit.kotlinx.serialization)
+     implementation(libs.okhttp)
+     implementation(libs.okhttp.logging)
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/AndroidManifest.xml ia-mode/frontend/app/src/main/AndroidManifest.xml
+--- a/frontend/app/src/main/AndroidManifest.xml	2026-09-26 09:01:15.261688316 +0000
++++ b/frontend/app/src/main/AndroidManifest.xml	2026-09-26 08:57:33.676070479 +0000
+@@ -50,7 +50,7 @@
+         android:enableOnBackInvokedCallback="true"
+         tools:targetApi="35">
+         <!-- Download the on-device OCR model with the app install instead of on first use -->
+-        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="ocr" />
++        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="ocr,ocr_devanagari" />
+ 
+         <activity
+             android:name=".MainActivity"
+@@ -62,6 +62,12 @@
+                 <action android:name="android.intent.action.MAIN" />
+                 <category android:name="android.intent.category.LAUNCHER" />
+             </intent-filter>
++            <!-- Share a job from LinkedIn/Naukri/Indeed to IA Mode to track it -->
++            <intent-filter android:label="Track job in IA Mode">
++                <action android:name="android.intent.action.SEND" />
++                <category android:name="android.intent.category.DEFAULT" />
++                <data android:mimeType="text/plain" />
++            </intent-filter>
+         </activity>
+ 
+         <!-- Reads WhatsApp messages, notices new Gmail; kept bound by the system -->
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/IAModeApp.kt ia-mode/frontend/app/src/main/java/com/iamode/app/IAModeApp.kt
+--- a/frontend/app/src/main/java/com/iamode/app/IAModeApp.kt	2026-09-26 09:01:15.261762444 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/IAModeApp.kt	2026-09-26 08:57:33.675988528 +0000
+@@ -56,6 +56,7 @@
+         scope.launch {
+             settings.settings.map { it.mailIntelligence }.distinctUntilChanged().collect { enabled ->
+                 com.iamode.app.data.mail.MailSyncWorker.schedule(this@IAModeApp, enabled)
++                com.iamode.app.data.jobs.JobReminderWorker.schedule(this@IAModeApp, enabled)
+                 if (enabled) com.iamode.app.data.mail.MailSyncWorker.syncNow(this@IAModeApp)
+             }
+         }
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/MainActivity.kt ia-mode/frontend/app/src/main/java/com/iamode/app/MainActivity.kt
+--- a/frontend/app/src/main/java/com/iamode/app/MainActivity.kt	2026-09-26 09:01:15.263603910 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/MainActivity.kt	2026-09-26 08:57:33.675556267 +0000
+@@ -75,5 +75,6 @@
+         const val EXTRA_CONVERSATION_ID = "conversation_id"
+         const val EXTRA_SESSION_ID = "session_id"
+         const val EXTRA_EMAIL_ID = "email_id"
++        const val EXTRA_APPLICATION_ID = "application_id"
+     }
+ }
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/core/database/IAModeDatabase.kt ia-mode/frontend/app/src/main/java/com/iamode/app/core/database/IAModeDatabase.kt
+--- a/frontend/app/src/main/java/com/iamode/app/core/database/IAModeDatabase.kt	2026-09-26 09:01:15.261900877 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/core/database/IAModeDatabase.kt	2026-09-26 08:55:52.439295795 +0000
+@@ -30,6 +30,9 @@
+ import com.iamode.app.core.database.entity.DocumentSourceEntity
+ import com.iamode.app.core.database.entity.MutedSenderEntity
+ import com.iamode.app.core.database.entity.WritingStyleEntity
++import com.iamode.app.core.database.entity.JobApplicationEntity
++import com.iamode.app.core.database.entity.ApplicationEventEntity
++import com.iamode.app.core.database.dao.JobApplicationDao
+ import com.iamode.app.core.database.entity.OpportunityEntity
+ import com.iamode.app.core.database.dao.MailIntelligenceDao
+ 
+@@ -41,8 +44,9 @@
+         OpportunityEntity::class, CalendarExtractionEntity::class, DocumentCandidateEntity::class,
+         DocumentSelectionEntity::class, CelebrationEntity::class, AutomationRuleEntity::class,
+         DocumentSourceEntity::class, MutedSenderEntity::class, WritingStyleEntity::class,
++        JobApplicationEntity::class, ApplicationEventEntity::class,
+     ],
+-    version = 5,
++    version = 6,
+     exportSchema = true,
+ )
+ abstract class IAModeDatabase : RoomDatabase() {
+@@ -55,6 +59,7 @@
+     abstract fun mailIntelligenceDao(): MailIntelligenceDao
+     abstract fun mailActionDao(): MailActionDao
+     abstract fun mailWorkflowDao(): MailWorkflowDao
++    abstract fun jobApplicationDao(): JobApplicationDao
+ 
+     companion object {
+         const val NAME = "iamode.db"
+@@ -135,5 +140,17 @@
+                 db.execSQL("CREATE TABLE IF NOT EXISTS `writing_style` (`id` TEXT NOT NULL, `profileJson` TEXT NOT NULL, `sampleCount` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
+             }
+         }
++
++        /** v1.7: job-application tracker. */
++        val MIGRATION_5_6 = object : Migration(5, 6) {
++            override fun migrate(db: SupportSQLiteDatabase) {
++                db.execSQL("CREATE TABLE IF NOT EXISTS `job_applications` (`id` TEXT NOT NULL, `company` TEXT, `companyKey` TEXT NOT NULL, `role` TEXT, `location` TEXT, `source` TEXT NOT NULL, `jobUrl` TEXT, `atsPlatform` TEXT, `referenceId` TEXT, `stage` TEXT NOT NULL, `maxStage` TEXT NOT NULL, `appliedAt` INTEGER, `firstResponseAt` INTEGER, `lastActivityAt` INTEGER NOT NULL, `nextStepAt` INTEGER, `nextStepNote` TEXT, `notes` TEXT, `recruiterEmail` TEXT, `lastEmailId` TEXT, `threadIdsJson` TEXT NOT NULL, `senderDomainsJson` TEXT NOT NULL, `followUpsSent` INTEGER NOT NULL, `lastFollowUpAt` INTEGER, `lastReminderType` TEXT, `lastRemindedAt` INTEGER, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))")
++                db.execSQL("CREATE INDEX IF NOT EXISTS `index_job_applications_companyKey` ON `job_applications` (`companyKey`)")
++                db.execSQL("CREATE INDEX IF NOT EXISTS `index_job_applications_stage` ON `job_applications` (`stage`)")
++                db.execSQL("CREATE TABLE IF NOT EXISTS `application_events` (`id` TEXT NOT NULL, `applicationId` TEXT NOT NULL, `type` TEXT NOT NULL, `emailId` TEXT, `at` INTEGER NOT NULL, `detail` TEXT, `dedupeKey` TEXT NOT NULL, PRIMARY KEY(`id`))")
++                db.execSQL("CREATE INDEX IF NOT EXISTS `index_application_events_applicationId` ON `application_events` (`applicationId`)")
++                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_application_events_dedupeKey` ON `application_events` (`dedupeKey`)")
++            }
++        }
+     }
+ }
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/core/database/dao/JobApplicationDao.kt ia-mode/frontend/app/src/main/java/com/iamode/app/core/database/dao/JobApplicationDao.kt
+--- a/frontend/app/src/main/java/com/iamode/app/core/database/dao/JobApplicationDao.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/core/database/dao/JobApplicationDao.kt	2026-09-26 08:55:52.439556522 +0000
+@@ -0,0 +1,26 @@
++package com.iamode.app.core.database.dao
++
++import androidx.room.Dao
++import androidx.room.Insert
++import androidx.room.OnConflictStrategy
++import androidx.room.Query
++import androidx.room.Upsert
++import com.iamode.app.core.database.entity.ApplicationEventEntity
++import com.iamode.app.core.database.entity.JobApplicationEntity
++import kotlinx.coroutines.flow.Flow
++
++@Dao
++interface JobApplicationDao {
++    @Upsert suspend fun upsert(e: JobApplicationEntity)
++    @Query("SELECT * FROM job_applications WHERE id = :id LIMIT 1") suspend fun get(id: String): JobApplicationEntity?
++    @Query("SELECT * FROM job_applications WHERE id = :id LIMIT 1") fun observe(id: String): Flow<JobApplicationEntity?>
++    @Query("SELECT * FROM job_applications ORDER BY lastActivityAt DESC") fun observeAll(): Flow<List<JobApplicationEntity>>
++    @Query("SELECT * FROM job_applications") suspend fun all(): List<JobApplicationEntity>
++    @Query("DELETE FROM job_applications WHERE id = :id") suspend fun delete(id: String)
++
++    /** Returns -1 when the same event (same email + type) was already recorded. */
++    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertEvent(e: ApplicationEventEntity): Long
++    @Query("SELECT * FROM application_events WHERE applicationId = :id ORDER BY at DESC") fun observeEvents(id: String): Flow<List<ApplicationEventEntity>>
++    @Query("SELECT applicationId FROM application_events WHERE emailId = :emailId LIMIT 1") suspend fun applicationForEmail(emailId: String): String?
++    @Query("DELETE FROM application_events WHERE applicationId = :id") suspend fun deleteEvents(id: String)
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/core/database/entity/Entities.kt ia-mode/frontend/app/src/main/java/com/iamode/app/core/database/entity/Entities.kt
+--- a/frontend/app/src/main/java/com/iamode/app/core/database/entity/Entities.kt	2026-09-26 09:01:15.261882888 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/core/database/entity/Entities.kt	2026-09-26 08:55:52.438870446 +0000
+@@ -299,3 +299,47 @@
+     val sampleCount: Int,
+     val updatedAt: Long,
+ )
++
++/** One job application, updated from career emails, shared links or by hand. Local only. */
++@Entity(tableName = "job_applications", indices = [Index("companyKey"), Index("stage")])
++data class JobApplicationEntity(
++    @PrimaryKey val id: String,
++    val company: String?,
++    val companyKey: String,
++    val role: String?,
++    val location: String?,
++    val source: String,
++    val jobUrl: String?,
++    val atsPlatform: String?,
++    val referenceId: String?,
++    val stage: String,
++    val maxStage: String,
++    val appliedAt: Long?,
++    val firstResponseAt: Long?,
++    val lastActivityAt: Long,
++    val nextStepAt: Long?,
++    val nextStepNote: String?,
++    val notes: String?,
++    val recruiterEmail: String?,
++    val lastEmailId: String?,
++    val threadIdsJson: String,
++    val senderDomainsJson: String,
++    val followUpsSent: Int,
++    val lastFollowUpAt: Long?,
++    val lastReminderType: String?,
++    val lastRemindedAt: Long?,
++    val createdAt: Long,
++    val updatedAt: Long,
++)
++
++/** Timeline entry. [dedupeKey] keeps a re-synced email from adding the same event twice. */
++@Entity(tableName = "application_events", indices = [Index("applicationId"), Index(value = ["dedupeKey"], unique = true)])
++data class ApplicationEventEntity(
++    @PrimaryKey val id: String,
++    val applicationId: String,
++    val type: String,
++    val emailId: String?,
++    val at: Long,
++    val detail: String?,
++    val dedupeKey: String,
++)
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/core/datastore/PreferenceKeys.kt ia-mode/frontend/app/src/main/java/com/iamode/app/core/datastore/PreferenceKeys.kt
+--- a/frontend/app/src/main/java/com/iamode/app/core/datastore/PreferenceKeys.kt	2026-09-26 09:01:15.261936816 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/core/datastore/PreferenceKeys.kt	2026-09-26 08:55:52.439919334 +0000
+@@ -39,6 +39,8 @@
+     val GMAIL_MIRROR = booleanPreferencesKey("gmail_mirror")
+     val GMAIL_LABELS = booleanPreferencesKey("gmail_labels")
+     val MATCH_WRITING_STYLE = booleanPreferencesKey("match_writing_style")
++    val MAIL_REPLY_LANGUAGE = stringPreferencesKey("mail_reply_language")
++    val JOB_REMINDERS = booleanPreferencesKey("job_reminders")
+     /** An automatic trigger the user overrode (see AutoModePolicy). */
+     val AUTO_SUPPRESSED = stringPreferencesKey("auto_suppressed")
+ 
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/core/di/AppModule.kt ia-mode/frontend/app/src/main/java/com/iamode/app/core/di/AppModule.kt
+--- a/frontend/app/src/main/java/com/iamode/app/core/di/AppModule.kt	2026-09-26 09:01:15.261986483 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/core/di/AppModule.kt	2026-09-26 08:55:52.439473409 +0000
+@@ -58,7 +58,7 @@
+             .openHelperFactory(SupportOpenHelperFactory(passphrase))
+             // Every schema change must ship a Migration (schemas are exported to app/schemas).
+             // Only a downgrade (installing an older build) wipes local data.
+-            .addMigrations(IAModeDatabase.MIGRATION_1_2, IAModeDatabase.MIGRATION_2_3, IAModeDatabase.MIGRATION_3_4, IAModeDatabase.MIGRATION_4_5)
++            .addMigrations(IAModeDatabase.MIGRATION_1_2, IAModeDatabase.MIGRATION_2_3, IAModeDatabase.MIGRATION_3_4, IAModeDatabase.MIGRATION_4_5, IAModeDatabase.MIGRATION_5_6)
+             .fallbackToDestructiveMigrationOnDowngrade()
+             .build()
+     }
+@@ -71,6 +71,7 @@
+     @Provides fun gmailAccountDao(db: IAModeDatabase) = db.gmailAccountDao()
+     @Provides fun mailIntelligenceDao(db: IAModeDatabase) = db.mailIntelligenceDao()
+     @Provides fun mailWorkflowDao(db: IAModeDatabase) = db.mailWorkflowDao()
++    @Provides fun jobApplicationDao(db: IAModeDatabase) = db.jobApplicationDao()
+     @Provides fun mailActionDao(db: IAModeDatabase) = db.mailActionDao()
+ 
+     @Provides @Singleton
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/core/network/dto/ApiDtos.kt ia-mode/frontend/app/src/main/java/com/iamode/app/core/network/dto/ApiDtos.kt
+--- a/frontend/app/src/main/java/com/iamode/app/core/network/dto/ApiDtos.kt	2026-09-26 09:01:15.262111536 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/core/network/dto/ApiDtos.kt	2026-09-26 08:55:52.439764754 +0000
+@@ -131,6 +131,14 @@
+     val ambiguous: Boolean = false, @SerialName("ambiguity_reason") val ambiguityReason: String? = null,
+ )
+ @Serializable data class OpportunityDto(val company: String? = null, val role: String? = null, val status: String = "none")
++@Serializable data class ApplicationDto(
++    val stage: String = "none",
++    @SerialName("reference_id") val referenceId: String? = null,
++    @SerialName("ats_platform") val atsPlatform: String? = null,
++    @SerialName("interview_round") val interviewRound: Int? = null,
++    val deadline: String? = null,
++    @SerialName("next_step") val nextStep: String? = null,
++)
+ @Serializable data class MailIntelligenceDto(
+     @SerialName("primary_category") val primaryCategory: String,
+     val labels: List<String> = emptyList(), val priority: String = "normal", val summary: String = "",
+@@ -142,6 +150,8 @@
+     @SerialName("document_request") val documentRequest: DocumentRequestDto? = null,
+     val calendar: CalendarExtractionDto? = null,
+     val opportunity: OpportunityDto? = null,
++    val application: ApplicationDto? = null,
++    val language: String? = null,
+     @SerialName("suspicious_reasons") val suspiciousReasons: List<String> = emptyList(),
+     @SerialName("recommended_action") val recommendedAction: String = "review",
+     val celebration: String = "none",
+@@ -171,6 +181,7 @@
+     @SerialName("attachment_names") val attachmentNames: List<String> = emptyList(),
+     val instructions: String? = null,
+     val style: StyleHintsDto? = null,
++    val language: String = "auto",
+ )
+ @Serializable data class ReplyDraftDto(val subject: String, val body: String)
+ @Serializable data class ReplyDraftResponseDto(val draft: ReplyDraftDto, @SerialName("prompt_version") val promptVersion: String)
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/core/notifications/AppNotifier.kt ia-mode/frontend/app/src/main/java/com/iamode/app/core/notifications/AppNotifier.kt
+--- a/frontend/app/src/main/java/com/iamode/app/core/notifications/AppNotifier.kt	2026-09-26 09:01:15.262160375 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/core/notifications/AppNotifier.kt	2026-09-26 08:57:33.675381215 +0000
+@@ -125,6 +125,25 @@
+         )
+     }
+ 
++    /** Job tracker nudge; tapping opens the application. */
++    fun jobReminder(applicationId: String, title: String, body: String) {
++        val intent = Intent(context, MainActivity::class.java).apply {
++            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
++            putExtra(MainActivity.EXTRA_APPLICATION_ID, applicationId)
++        }
++        val id = ("job$applicationId").hashCode()
++        post(
++            id,
++            NotificationCompat.Builder(context, NotificationChannels.ACTIVITY)
++                .setSmallIcon(R.drawable.ic_stat_iamode)
++                .setContentTitle(title)
++                .setContentText(body)
++                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
++                .setContentIntent(PendingIntent.getActivity(context, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
++                .setAutoCancel(true),
++        )
++    }
++
+     /** Big news arrived while the app was closed. Opening it plays the celebration once. */
+     fun celebration(emailId: String, headline: String, subtitle: String?) {
+         val intent = Intent(context, MainActivity::class.java).apply {
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/data/jobs/JobReminderWorker.kt ia-mode/frontend/app/src/main/java/com/iamode/app/data/jobs/JobReminderWorker.kt
+--- a/frontend/app/src/main/java/com/iamode/app/data/jobs/JobReminderWorker.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/data/jobs/JobReminderWorker.kt	2026-09-26 08:57:33.665173121 +0000
+@@ -0,0 +1,67 @@
++package com.iamode.app.data.jobs
++
++import android.content.Context
++import androidx.hilt.work.HiltWorker
++import androidx.work.CoroutineWorker
++import androidx.work.ExistingPeriodicWorkPolicy
++import androidx.work.PeriodicWorkRequestBuilder
++import androidx.work.WorkManager
++import androidx.work.WorkerParameters
++import com.iamode.app.core.notifications.AppNotifier
++import com.iamode.app.domain.jobs.FollowUpPlanner
++import com.iamode.app.domain.jobs.PlannerInput
++import com.iamode.app.domain.jobs.ReminderType
++import com.iamode.app.domain.repository.SettingsRepository
++import dagger.assisted.Assisted
++import dagger.assisted.AssistedInject
++import java.util.concurrent.TimeUnit
++
++/**
++ * Once a day: follow-up nudges, deadlines and offer reminders for tracked applications.
++ * It never sends anything. A follow-up nudge opens a drafted email the user reviews and approves.
++ * The same nudge isn't repeated within 3 days.
++ */
++@HiltWorker
++class JobReminderWorker @AssistedInject constructor(
++    @Assisted context: Context,
++    @Assisted params: WorkerParameters,
++    private val tracker: JobTrackerRepository,
++    private val notifier: AppNotifier,
++    private val settings: SettingsRepository,
++) : CoroutineWorker(context, params) {
++
++    override suspend fun doWork(): Result {
++        if (!settings.current().jobReminders) return Result.success()
++        val now = System.currentTimeMillis()
++        val apps = tracker.all()
++        val byId = apps.associateBy { it.id }
++        val reminders = FollowUpPlanner.plan(apps.map {
++            PlannerInput(it.id, JobTrackerRepository.stageOf(it.stage), it.lastActivityAt, it.nextStepAt, it.lastFollowUpAt, it.followUpsSent)
++        }, now)
++        for (r in reminders) {
++            val a = byId[r.applicationId] ?: continue
++            if (a.lastReminderType == r.type.name && a.lastRemindedAt != null && now - a.lastRemindedAt < 3 * FollowUpPlanner.DAY) continue
++            val what = listOfNotNull(a.role, a.company).joinToString(" · ").ifBlank { "Your application" }
++            when (r.type) {
++                ReminderType.MARK_GHOSTED -> {
++                    tracker.markGhosted(a.id)
++                    notifier.jobReminder(a.id, "No reply from ${a.company ?: "this company"}", "$what was marked as no response. Tap to change it.")
++                }
++                else -> notifier.jobReminder(a.id, r.type.title, what)
++            }
++            tracker.markReminded(a.id, r.type.name)
++        }
++        return Result.success()
++    }
++
++    companion object {
++        private const val NAME = "job-reminders-daily"
++
++        fun schedule(context: Context, enabled: Boolean) {
++            val wm = WorkManager.getInstance(context)
++            if (!enabled) { wm.cancelUniqueWork(NAME); return }
++            wm.enqueueUniquePeriodicWork(NAME, ExistingPeriodicWorkPolicy.KEEP,
++                PeriodicWorkRequestBuilder<JobReminderWorker>(1, TimeUnit.DAYS).build())
++        }
++    }
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/data/jobs/JobTrackerRepository.kt ia-mode/frontend/app/src/main/java/com/iamode/app/data/jobs/JobTrackerRepository.kt
+--- a/frontend/app/src/main/java/com/iamode/app/data/jobs/JobTrackerRepository.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/data/jobs/JobTrackerRepository.kt	2026-09-26 08:57:02.497616120 +0000
+@@ -0,0 +1,257 @@
++package com.iamode.app.data.jobs
++
++import com.iamode.app.core.database.dao.JobApplicationDao
++import com.iamode.app.core.database.dao.MailActionDao
++import com.iamode.app.core.database.entity.ApplicationEventEntity
++import com.iamode.app.core.database.entity.JobApplicationEntity
++import com.iamode.app.core.database.entity.MailActionEntity
++import com.iamode.app.core.diagnostics.DiagnosticsLog
++import com.iamode.app.domain.jobs.ApplicationEventType
++import com.iamode.app.domain.jobs.ApplicationEvidence
++import com.iamode.app.domain.jobs.ApplicationInsights
++import com.iamode.app.domain.jobs.ApplicationMatcher
++import com.iamode.app.domain.jobs.ApplicationSource
++import com.iamode.app.domain.jobs.ApplicationStage
++import com.iamode.app.domain.jobs.InsightInput
++import com.iamode.app.domain.jobs.MatchResult
++import com.iamode.app.domain.jobs.StageMachine
++import com.iamode.app.domain.jobs.TrackedApplication
++import com.iamode.app.domain.mail.MailActionStatus
++import com.iamode.app.domain.mail.MailActionType
++import kotlinx.coroutines.flow.map
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++import kotlinx.serialization.builtins.SetSerializer
++import kotlinx.serialization.builtins.serializer
++import kotlinx.serialization.json.Json
++import java.time.LocalDate
++import java.time.LocalTime
++import java.time.ZoneId
++import java.util.UUID
++import javax.inject.Inject
++import javax.inject.Singleton
++
++/** What the mail pipeline tells the tracker about one career email. */
++data class CareerEmail(
++    val emailId: String,
++    val threadId: String,
++    val fromAddress: String,
++    val replyTo: String?,
++    val company: String?,
++    val role: String?,
++    val stage: String?,
++    val referenceId: String?,
++    val atsPlatform: String?,
++    val interviewRound: Int?,
++    val deadline: String?,
++    val nextStep: String?,
++    val receivedAt: Long,
++)
++
++/**
++ * The job-application tracker. Everything is stored on the phone (encrypted database).
++ * Email evidence only moves applications forward; the user can always change a stage by hand.
++ */
++@Singleton
++class JobTrackerRepository @Inject constructor(
++    private val dao: JobApplicationDao,
++    private val actions: MailActionDao,
++    private val json: Json,
++    private val log: DiagnosticsLog,
++) {
++    private val lock = Mutex() // one email at a time, so two syncs can't create duplicates
++    private val setSer = SetSerializer(String.serializer())
++
++    val applications = dao.observeAll()
++    val funnel = dao.observeAll().map { list ->
++        ApplicationInsights.funnel(list.map {
++            InsightInput(stageOf(it.maxStage), stageOf(it.stage), it.appliedAt, it.firstResponseAt)
++        })
++    }
++    fun application(id: String) = dao.observe(id)
++    fun events(id: String) = dao.observeEvents(id)
++
++    // ---------------------------------------------------------------- from email
++    /** Returns the application id the email was linked to, or null if it isn't trackable. */
++    suspend fun onCareerEmail(e: CareerEmail): String? = lock.withLock {
++        dao.applicationForEmail(e.emailId)?.let { return@withLock it } // already processed
++        val evidenceStage = ApplicationStage.fromApi(e.stage)
++        val all = dao.all()
++        val tracked = all.map(::toTracked)
++        val result = ApplicationMatcher.match(
++            ApplicationEvidence(e.threadId, e.fromAddress, e.company, e.role, e.referenceId, evidenceStage), tracked,
++        )
++        val (existing, note) = when (result) {
++            is MatchResult.Existing -> all.first { it.id == result.applicationId } to null
++            // Several fit and the email doesn't say which: attach to the most recently active one and say so.
++            is MatchResult.Ambiguous -> all.filter { it.id in result.candidateIds }.maxBy { it.lastActivityAt } to
++                "Linked to the most recent application at this company. Change it if it's a different role."
++            MatchResult.New -> null to null
++            MatchResult.Untrackable -> return@withLock null
++        }
++        val now = System.currentTimeMillis()
++        val app = existing?.let { update(it, e, evidenceStage, now) } ?: create(e, evidenceStage, now)
++        dao.upsert(app)
++        val type = evidenceStage?.let(ApplicationEventType::forStage) ?: ApplicationEventType.NOTE
++        val detail = listOfNotNull(
++            e.interviewRound?.let { "Round $it" }, e.nextStep, note,
++            if (existing == null) "Tracking started from an email" else null,
++        ).joinToString(" · ").ifBlank { null }
++        dao.insertEvent(ApplicationEventEntity(UUID.randomUUID().toString(), app.id, type.name, e.emailId, e.receivedAt, detail,
++            dedupeKey = "${app.id}:${e.emailId}:${type.name}"))
++        app.id
++    }
++
++    private fun create(e: CareerEmail, stage: ApplicationStage?, now: Long): JobApplicationEntity {
++        val s = stage ?: ApplicationStage.SAVED
++        val responded = s.order > ApplicationStage.APPLIED.order || s == ApplicationStage.REJECTED
++        return JobApplicationEntity(
++            id = UUID.randomUUID().toString(), company = e.company, companyKey = keyFor(e.company, e.fromAddress), role = e.role,
++            location = null, source = ApplicationSource.EMAIL.name, jobUrl = null, atsPlatform = e.atsPlatform,
++            referenceId = e.referenceId, stage = s.name, maxStage = higher(ApplicationStage.SAVED, s).name,
++            appliedAt = if (s != ApplicationStage.SAVED) e.receivedAt else null,
++            firstResponseAt = if (responded) e.receivedAt else null, lastActivityAt = e.receivedAt,
++            nextStepAt = deadlineMillis(e.deadline), nextStepNote = e.nextStep, notes = null,
++            recruiterEmail = recruiterOf(e), lastEmailId = e.emailId,
++            threadIdsJson = json.encodeToString(setSer, setOf(e.threadId)),
++            senderDomainsJson = json.encodeToString(setSer, setOfNotNull(ApplicationMatcher.domainOf(e.fromAddress))),
++            followUpsSent = 0, lastFollowUpAt = null, lastReminderType = null, lastRemindedAt = null, createdAt = now, updatedAt = now,
++        )
++    }
++
++    private fun update(a: JobApplicationEntity, e: CareerEmail, evidence: ApplicationStage?, now: Long): JobApplicationEntity {
++        val current = stageOf(a.stage)
++        val next = evidence?.let { StageMachine.fromEvidence(current, it) } ?: current
++        val isResponse = evidence != null && evidence != ApplicationStage.APPLIED
++        return a.copy(
++            company = a.company ?: e.company, role = a.role ?: e.role,
++            atsPlatform = a.atsPlatform ?: e.atsPlatform, referenceId = a.referenceId ?: e.referenceId,
++            stage = next.name, maxStage = higher(stageOf(a.maxStage), next).name,
++            appliedAt = a.appliedAt ?: e.receivedAt.takeIf { evidence == ApplicationStage.APPLIED },
++            firstResponseAt = a.firstResponseAt ?: e.receivedAt.takeIf { isResponse && a.appliedAt != null },
++            lastActivityAt = maxOf(a.lastActivityAt, e.receivedAt),
++            nextStepAt = deadlineMillis(e.deadline) ?: a.nextStepAt.takeIf { next == current },
++            nextStepNote = e.nextStep ?: a.nextStepNote.takeIf { next == current },
++            recruiterEmail = recruiterOf(e) ?: a.recruiterEmail, lastEmailId = e.emailId,
++            threadIdsJson = json.encodeToString(setSer, threads(a) + e.threadId),
++            senderDomainsJson = json.encodeToString(setSer, domains(a) + setOfNotNull(ApplicationMatcher.domainOf(e.fromAddress))),
++            updatedAt = now,
++        )
++    }
++
++    // ---------------------------------------------------------------- manual
++    suspend fun addManual(company: String?, role: String?, jobUrl: String?, source: ApplicationSource, stage: ApplicationStage, location: String?): String {
++        val now = System.currentTimeMillis()
++        val id = UUID.randomUUID().toString()
++        dao.upsert(JobApplicationEntity(
++            id = id, company = company?.trim()?.ifBlank { null }, companyKey = keyFor(company, null), role = role?.trim()?.ifBlank { null },
++            location = location?.trim()?.ifBlank { null }, source = source.name, jobUrl = jobUrl?.trim()?.ifBlank { null },
++            atsPlatform = null, referenceId = null, stage = stage.name, maxStage = stage.name,
++            appliedAt = now.takeIf { stage != ApplicationStage.SAVED }, firstResponseAt = null, lastActivityAt = now,
++            nextStepAt = null, nextStepNote = null, notes = null, recruiterEmail = null, lastEmailId = null,
++            threadIdsJson = "[]", senderDomainsJson = "[]", followUpsSent = 0, lastFollowUpAt = null,
++            lastReminderType = null, lastRemindedAt = null, createdAt = now, updatedAt = now,
++        ))
++        event(id, ApplicationEventType.CREATED, if (source == ApplicationSource.SHARED_LINK) "Added from a shared job link" else "Added by you")
++        return id
++    }
++
++    /** A choice the user made on screen: applied directly (can move backwards). */
++    suspend fun setStage(id: String, stage: ApplicationStage) {
++        val a = dao.get(id) ?: return
++        if (a.stage == stage.name) return
++        val now = System.currentTimeMillis()
++        dao.upsert(a.copy(stage = stage.name, maxStage = higher(stageOf(a.maxStage), stage).name,
++            appliedAt = a.appliedAt ?: now.takeIf { stage.order >= ApplicationStage.APPLIED.order && !stage.terminal },
++            lastActivityAt = now, updatedAt = now))
++        event(id, ApplicationEventType.STAGE_CHANGED, "${stageOf(a.stage).label} → ${stage.label}")
++    }
++
++    suspend fun updateDetails(id: String, company: String?, role: String?, location: String?, jobUrl: String?, notes: String?) {
++        val a = dao.get(id) ?: return
++        dao.upsert(a.copy(company = company?.ifBlank { null }, companyKey = keyFor(company, null).ifBlank { a.companyKey },
++            role = role?.ifBlank { null }, location = location?.ifBlank { null }, jobUrl = jobUrl?.ifBlank { null },
++            notes = notes?.ifBlank { null }, updatedAt = System.currentTimeMillis()))
++    }
++
++    suspend fun addNote(id: String, text: String) = event(id, ApplicationEventType.NOTE, text.trim().take(500))
++
++    suspend fun delete(id: String) { dao.deleteEvents(id); dao.delete(id) }
++
++    // ---------------------------------------------------------------- follow-ups
++    /**
++     * Proposes a follow-up email in the same thread, to the recruiter who wrote last. It goes through the normal
++     * review → approve → send path (policy engine: recipient must be that email's sender or Reply-To).
++     * Returns the action id to open, or null if there's no email to reply to.
++     */
++    suspend fun proposeFollowUp(id: String): String? {
++        val a = dao.get(id) ?: return null
++        val emailId = a.lastEmailId ?: return null
++        val recipient = a.recruiterEmail ?: return null
++        val key = "follow_up:$id:${a.followUpsSent + 1}"
++        actions.byIdempotencyKey(key)?.let { return it.id }
++        val actionId = UUID.nameUUIDFromBytes(key.toByteArray()).toString()
++        val now = System.currentTimeMillis()
++        actions.upsert(MailActionEntity(actionId, emailId, MailActionType.SEND_FOLLOW_UP.name,
++            payloadJson = """{"applicationId":"$id"}""", status = MailActionStatus.REVIEW_REQUIRED.name, idempotencyKey = key,
++            createdAt = now, updatedAt = now, recipient = recipient))
++        return actionId
++    }
++
++    /** Called by the executor after a follow-up was actually sent. */
++    suspend fun onFollowUpSent(payloadJson: String?) {
++        val id = payloadJson?.let { Regex("\"applicationId\":\"([^\"]+)\"").find(it)?.groupValues?.get(1) } ?: return
++        val a = dao.get(id) ?: return
++        val now = System.currentTimeMillis()
++        dao.upsert(a.copy(followUpsSent = a.followUpsSent + 1, lastFollowUpAt = now, lastActivityAt = now, updatedAt = now))
++        event(id, ApplicationEventType.FOLLOW_UP_SENT, null)
++    }
++
++    // ---------------------------------------------------------------- reminders (worker)
++    suspend fun all() = dao.all()
++
++    suspend fun markReminded(id: String, type: String) {
++        val a = dao.get(id) ?: return
++        dao.upsert(a.copy(lastReminderType = type, lastRemindedAt = System.currentTimeMillis()))
++    }
++
++    suspend fun markGhosted(id: String) {
++        val a = dao.get(id) ?: return
++        if (stageOf(a.stage).terminal) return
++        dao.upsert(a.copy(stage = ApplicationStage.GHOSTED.name, updatedAt = System.currentTimeMillis()))
++        event(id, ApplicationEventType.GHOSTED, "30 days without a reply. Any new email brings it back.")
++        log.record("Jobs", true, "Marked an application as no response")
++    }
++
++    // ---------------------------------------------------------------- helpers
++    private suspend fun event(id: String, type: ApplicationEventType, detail: String?) {
++        val eid = UUID.randomUUID().toString()
++        dao.insertEvent(ApplicationEventEntity(eid, id, type.name, null, System.currentTimeMillis(), detail, dedupeKey = eid))
++    }
++
++    fun toTracked(a: JobApplicationEntity) = TrackedApplication(
++        a.id, a.company, a.role, stageOf(a.stage), a.lastActivityAt, threads(a), domains(a), a.referenceId,
++    )
++
++    private fun threads(a: JobApplicationEntity): Set<String> = runCatching { json.decodeFromString(setSer, a.threadIdsJson) }.getOrDefault(emptySet())
++    private fun domains(a: JobApplicationEntity): Set<String> = runCatching { json.decodeFromString(setSer, a.senderDomainsJson) }.getOrDefault(emptySet())
++
++    private fun keyFor(company: String?, from: String?): String =
++        ApplicationMatcher.normalizeCompany(company).ifBlank { from?.let(ApplicationMatcher::companyKeyFromDomain).orEmpty() }
++
++    /** Reply-To if given, else the sender, unless that's an automated address. */
++    private fun recruiterOf(e: CareerEmail): String? = listOfNotNull(e.replyTo, e.fromAddress)
++        .map { it.trim().lowercase() }
++        .firstOrNull { !Regex("(^|[._-])(no-?reply|do-?not-?reply|notifications?|mailer)").containsMatchIn(it.substringBefore('@')) }
++
++    private fun deadlineMillis(date: String?): Long? = date?.let {
++        runCatching { LocalDate.parse(it).atTime(LocalTime.of(9, 0)).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli() }.getOrNull()
++    }
++
++    companion object {
++        fun stageOf(name: String): ApplicationStage = runCatching { ApplicationStage.valueOf(name) }.getOrDefault(ApplicationStage.SAVED)
++        /** The furthest non-final stage reached (used for the funnel). */
++        private fun higher(a: ApplicationStage, b: ApplicationStage): ApplicationStage =
++            listOf(a, b).filter { !it.terminal }.maxByOrNull { it.order } ?: a
++    }
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/data/mail/DocumentTextExtractor.kt ia-mode/frontend/app/src/main/java/com/iamode/app/data/mail/DocumentTextExtractor.kt
+--- a/frontend/app/src/main/java/com/iamode/app/data/mail/DocumentTextExtractor.kt	2026-09-26 09:01:15.262407244 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/data/mail/DocumentTextExtractor.kt	2026-09-26 08:53:10.085689734 +0000
+@@ -10,6 +10,7 @@
+ import android.util.LruCache
+ import com.google.mlkit.vision.common.InputImage
+ import com.google.mlkit.vision.text.TextRecognition
++import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
+ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+ import com.iamode.app.domain.mail.DocumentFile
+ import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+@@ -45,6 +46,8 @@
+     private val lockedCache = LruCache<String, Boolean>(150)
+     @Volatile private var pdfReady = false
+     private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
++    /** Reads Devanagari (Hindi, Marathi) and Latin. Telugu/Tamil aren't supported by on-device ML Kit. */
++    private val devanagari by lazy { TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build()) }
+ 
+     suspend fun extract(files: List<DocumentFile>, maxFiles: Int = 40, maxOcr: Int = 10): Extraction = withContext(Dispatchers.IO) {
+         val targets = files.filter { ext(it.name) in READABLE && (it.sizeBytes ?: 0L) < 25L * 1024 * 1024 && !it.uri.startsWith("gdrive:") }
+@@ -87,7 +90,14 @@
+         val out = StringBuilder()
+         try {
+             for (bmp in pages) {
+-                out.append(recognizer.process(InputImage.fromBitmap(bmp, 0)).await().text).append('\n')
++                val image = InputImage.fromBitmap(bmp, 0)
++                var text = recognizer.process(image).await().text
++                // Little Latin text often means a Hindi/Marathi document: try the Devanagari model.
++                if (text.count { it.isLetter() } < MIN_TEXT) {
++                    val hi = runCatching { devanagari.process(image).await().text }.getOrNull().orEmpty()
++                    if (hi.count { it.isLetter() } > text.count { it.isLetter() }) text = hi
++                }
++                out.append(text).append('\n')
+                 if (out.length > MAX_CHARS) break
+             }
+         } finally {
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/data/mail/MailActionExecutor.kt ia-mode/frontend/app/src/main/java/com/iamode/app/data/mail/MailActionExecutor.kt
+--- a/frontend/app/src/main/java/com/iamode/app/data/mail/MailActionExecutor.kt	2026-09-26 09:01:15.262367057 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/data/mail/MailActionExecutor.kt	2026-09-26 08:57:33.662063446 +0000
+@@ -38,6 +38,7 @@
+     private val documents: DocumentSources,
+     private val calendar: CalendarWriter,
+     private val log: DiagnosticsLog,
++    private val tracker: com.iamode.app.data.jobs.JobTrackerRepository,
+ ) {
+     sealed interface Outcome {
+         data class Done(val message: String) : Outcome
+@@ -84,7 +85,8 @@
+         }
+ 
+         val result: Result<Pair<String, String?>> = when (type) {
+-            MailActionType.SEND_DOCUMENT_REPLY, MailActionType.SEND_REPLY, MailActionType.UNSUBSCRIBE_EMAIL -> send(a, item.accountEmail,
++            MailActionType.SEND_DOCUMENT_REPLY, MailActionType.SEND_REPLY, MailActionType.UNSUBSCRIBE_EMAIL,
++            MailActionType.SEND_FOLLOW_UP -> send(a, item.accountEmail,
+                 item.threadId, item.gmailMessageIdHeader, item.gmailReferences, selections)
+             MailActionType.CREATE_CALENDAR_EVENT -> createEvent(extraction, proposal, calendarId, reminders)
+             MailActionType.REVIEW_EMAIL -> Result.failure(IllegalStateException("Nothing to execute"))
+@@ -100,6 +102,7 @@
+                 workflow.advance(a.emailId, CelebrationState.ACTION_COMPLETED.name,
+                     CelebrationState.entries.filter { it.ordinal >= CelebrationState.CELEBRATION_SHOWN.ordinal &&
+                         it != CelebrationState.ACTION_COMPLETED }.map { it.name })
++                if (type == MailActionType.SEND_FOLLOW_UP) runCatching { tracker.onFollowUpSent(fresh.payloadJson) }
+                 log.record("Mail", true, "${type.label}: done")
+                 Outcome.Done(message)
+             },
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/data/mail/MailIntelligenceRepository.kt ia-mode/frontend/app/src/main/java/com/iamode/app/data/mail/MailIntelligenceRepository.kt
+--- a/frontend/app/src/main/java/com/iamode/app/data/mail/MailIntelligenceRepository.kt	2026-09-26 09:01:15.262334479 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/data/mail/MailIntelligenceRepository.kt	2026-09-26 08:57:33.661820684 +0000
+@@ -70,6 +70,7 @@
+     private val mailbox: MailboxActions,
+     private val extractor: DocumentTextExtractor,
+     private val style: WritingStyleRepository,
++    private val tracker: com.iamode.app.data.jobs.JobTrackerRepository,
+     private val log: DiagnosticsLog,
+     private val json: Json,
+ ) {
+@@ -176,6 +177,21 @@
+                 company = o.company, role = o.role, status = o.status, receivedAt = p.timestamp, updatedAt = now,
+             ))
+         }
++        // Job tracker: career emails update (or start) an application. Never blocks classification.
++        val app = ai.application
++        val opp = ai.opportunity
++        if ((app != null && (app.stage != "none" || app.referenceId != null)) || (opp != null && opp.status != "none")) {
++            runCatching {
++                tracker.onCareerEmail(com.iamode.app.data.jobs.CareerEmail(
++                    emailId = p.gmailId, threadId = p.threadId, fromAddress = p.fromEmail, replyTo = p.replyTo,
++                    company = opp?.company, role = opp?.role,
++                    stage = app?.stage?.takeIf { it != "none" } ?: opp?.status?.takeIf { it in setOf("selected", "offer", "interview", "applied", "rejected") },
++                    referenceId = app?.referenceId, atsPlatform = app?.atsPlatform, interviewRound = app?.interviewRound,
++                    deadline = app?.deadline, nextStep = app?.nextStep, receivedAt = p.timestamp,
++                ))
++            }.onFailure { log.record("Jobs", false, "Couldn't update the job tracker: ${it.javaClass.simpleName}") }
++        }
++
+         if (cal != null) {
+             val hash = cal.eventHash(p.gmailId)
+             workflow.insertCalendar(CalendarExtractionEntity(
+@@ -289,6 +305,7 @@
+         val purpose = when (MailActionType.valueOf(action.actionType)) {
+             MailActionType.SEND_DOCUMENT_REPLY -> "send_document"
+             MailActionType.UNSUBSCRIBE_EMAIL -> "unsubscribe"
++            MailActionType.SEND_FOLLOW_UP -> "follow_up"
+             else -> if (item.category == "interview_invitation") "confirm_interview" else "reply"
+         }
+         val res = api.mailReplyDraft(ReplyDraftRequestDto(
+@@ -297,6 +314,7 @@
+             userName = settings.current().myName.trim(), purpose = purpose, tone = tone,
+             attachmentNames = workflow.selectionsFor(actionId).map { it.displayName }, instructions = instructions,
+             style = if (settings.current().matchWritingStyle) style.current()?.let(style::hints) else null,
++            language = settings.current().mailReplyLanguage,
+         ))
+         val fresh = requireNotNull(actions.get(actionId))
+         actions.upsert(fresh.copy(draftSubject = res.draft.subject, draftBody = res.draft.body, updatedAt = System.currentTimeMillis(),
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/data/repository/SettingsRepositoryImpl.kt ia-mode/frontend/app/src/main/java/com/iamode/app/data/repository/SettingsRepositoryImpl.kt
+--- a/frontend/app/src/main/java/com/iamode/app/data/repository/SettingsRepositoryImpl.kt	2026-09-26 09:01:15.263080798 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/data/repository/SettingsRepositoryImpl.kt	2026-09-26 08:55:52.440071523 +0000
+@@ -61,6 +61,8 @@
+             prefs[K.GMAIL_MIRROR] = s.gmailMirror
+             prefs[K.GMAIL_LABELS] = s.gmailLabels
+             prefs[K.MATCH_WRITING_STYLE] = s.matchWritingStyle
++            prefs[K.MAIL_REPLY_LANGUAGE] = s.mailReplyLanguage
++            prefs[K.JOB_REMINDERS] = s.jobReminders
+         }
+     }
+ 
+@@ -107,6 +109,8 @@
+             gmailMirror = this[K.GMAIL_MIRROR] ?: d.gmailMirror,
+             gmailLabels = this[K.GMAIL_LABELS] ?: d.gmailLabels,
+             matchWritingStyle = this[K.MATCH_WRITING_STYLE] ?: d.matchWritingStyle,
++            mailReplyLanguage = this[K.MAIL_REPLY_LANGUAGE] ?: d.mailReplyLanguage,
++            jobReminders = this[K.JOB_REMINDERS] ?: d.jobReminders,
+         )
+     }
+ 
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/domain/jobs/ApplicationMatcher.kt ia-mode/frontend/app/src/main/java/com/iamode/app/domain/jobs/ApplicationMatcher.kt
+--- a/frontend/app/src/main/java/com/iamode/app/domain/jobs/ApplicationMatcher.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/domain/jobs/ApplicationMatcher.kt	2026-09-26 08:50:19.242575832 +0000
+@@ -0,0 +1,125 @@
++package com.iamode.app.domain.jobs
++
++import kotlin.math.max
++import kotlin.math.min
++
++sealed interface MatchResult {
++    data class Existing(val applicationId: String, val reason: String) : MatchResult
++    /** Several applications fit (e.g. two roles at one company); the user picks. */
++    data class Ambiguous(val candidateIds: List<String>) : MatchResult
++    data object New : MatchResult
++    /** Not enough information to track (no company and no role). */
++    data object Untrackable : MatchResult
++}
++
++/**
++ * Links a career email to the application it belongs to, in order of certainty:
++ * same thread → same reference ID → company (from the email or the sender's domain) + role.
++ * Emails from job platforms (Workday, Greenhouse, Naukri…) don't reveal the company by domain,
++ * so they rely on the company/role the AI extracted.
++ */
++object ApplicationMatcher {
++    private const val COMPANY_MATCH = 0.92
++    private const val ROLE_MATCH = 0.86
++
++    /** Senders that are platforms, not employers. */
++    val platformDomains = setOf(
++        "greenhouse.io", "greenhouse-mail.io", "lever.co", "hire.lever.co", "myworkday.com", "myworkdayjobs.com", "workday.com",
++        "icims.com", "smartrecruiters.com", "ashbyhq.com", "jobvite.com", "taleo.net", "successfactors.com", "oraclecloud.com",
++        "naukri.com", "naukrigulf.com", "linkedin.com", "indeed.com", "instahyre.com", "foundit.in", "monsterindia.com", "shine.com",
++        "internshala.com", "wellfound.com", "angel.co", "hirist.tech", "iimjobs.com", "cutshort.io", "unstop.com", "hackerrank.com",
++        "hackerearth.com", "codility.com", "mettl.com", "gmail.com", "outlook.com", "yahoo.com", "hotmail.com",
++    )
++
++    private val companySuffixes = setOf(
++        "pvt", "private", "ltd", "limited", "inc", "llc", "llp", "corp", "corporation", "technologies", "technology", "tech",
++        "solutions", "services", "software", "systems", "labs", "india", "global", "co", "company", "the", "group", "careers",
++        "jobs", "hr", "recruitment", "talent", "consulting", "consultancy", "infotech", "digital",
++    )
++
++    fun normalizeCompany(name: String?): String {
++        val words = name.orEmpty().lowercase().replace("&", " and ").split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
++        val core = words.filter { it !in companySuffixes }
++        return (core.ifEmpty { words }).joinToString(" ")
++    }
++
++    fun normalizeRole(role: String?): String = role.orEmpty().lowercase()
++        .replace(Regex("\\b(sr|snr)\\b\\.?"), "senior").replace(Regex("\\b(jr)\\b\\.?"), "junior")
++        .replace(Regex("\\b(engg|engr)\\b\\.?"), "engineer").replace(Regex("\\bdev\\b"), "developer")
++        .split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }.joinToString(" ")
++
++    fun domainOf(address: String): String? = address.substringAfterLast('@', "").lowercase().trim(' ', '>').ifBlank { null }
++
++    private fun registrable(domain: String): String {
++        val p = domain.split('.')
++        return if (p.size >= 3 && p[p.size - 2] in setOf("co", "com", "org", "net", "ac") && p.last().length == 2) p.takeLast(3).joinToString(".")
++        else p.takeLast(2).joinToString(".")
++    }
++
++    fun isPlatform(domain: String?): Boolean = domain != null && registrable(domain).let { r -> platformDomains.any { r == it || domain.endsWith(".$it") } }
++
++    /** "careers.abc-tech.com" → "abc" (comparable with normalizeCompany("ABC Technologies")). */
++    fun companyKeyFromDomain(address: String): String? {
++        val d = domainOf(address) ?: return null
++        if (isPlatform(d)) return null
++        return normalizeCompany(registrable(d).substringBefore('.').replace('-', ' ')).ifBlank { null }
++    }
++
++    fun match(e: ApplicationEvidence, apps: List<TrackedApplication>): MatchResult {
++        apps.firstOrNull { e.threadId in it.threadIds }?.let { return MatchResult.Existing(it.id, "same email thread") }
++
++        val companyKey = normalizeCompany(e.company).ifBlank { null } ?: companyKeyFromDomain(e.fromAddress)
++        e.referenceId?.trim()?.lowercase()?.takeIf { it.length >= 3 }?.let { ref ->
++            apps.firstOrNull { a ->
++                a.referenceId?.trim()?.lowercase() == ref && (companyKey == null || similarity(companyKey, normalizeCompany(a.company)) >= COMPANY_MATCH)
++            }?.let { return MatchResult.Existing(it.id, "same reference ID") }
++        }
++
++        if (companyKey == null) return if (e.role.isNullOrBlank()) MatchResult.Untrackable else MatchResult.New
++        val sameCompany = apps.filter { a ->
++            similarity(companyKey, normalizeCompany(a.company)) >= COMPANY_MATCH ||
++                (domainOf(e.fromAddress)?.let { d -> !isPlatform(d) && d in a.senderDomains } == true)
++        }
++        if (sameCompany.isEmpty()) return MatchResult.New
++
++        val role = normalizeRole(e.role)
++        if (role.isNotBlank()) {
++            val sameRole = sameCompany.filter { a -> a.role.isNullOrBlank() || similarity(role, normalizeRole(a.role)) >= ROLE_MATCH }
++            return when {
++                sameRole.size == 1 -> MatchResult.Existing(sameRole.single().id, "same company and role")
++                sameRole.size > 1 -> sameRole.filter { !it.role.isNullOrBlank() }.let { exact ->
++                    if (exact.size == 1) MatchResult.Existing(exact.single().id, "same company and role") else MatchResult.Ambiguous(sameRole.map { it.id })
++                }
++                else -> MatchResult.New // a different role at the same company is a separate application
++            }
++        }
++        val active = sameCompany.filter { it.stage.active || it.stage == ApplicationStage.GHOSTED }
++        return when {
++            sameCompany.size == 1 -> MatchResult.Existing(sameCompany.single().id, "same company")
++            active.size == 1 -> MatchResult.Existing(active.single().id, "only active application at this company")
++            else -> MatchResult.Ambiguous(sameCompany.map { it.id })
++        }
++    }
++
++    /** Jaro-Winkler similarity in [0, 1]. */
++    fun similarity(a: String, b: String): Double {
++        if (a.isEmpty() || b.isEmpty()) return 0.0
++        if (a == b) return 1.0
++        val window = max(0, max(a.length, b.length) / 2 - 1)
++        val aM = BooleanArray(a.length); val bM = BooleanArray(b.length)
++        var matches = 0
++        for (i in a.indices) {
++            for (j in max(0, i - window)..min(b.length - 1, i + window)) {
++                if (!bM[j] && a[i] == b[j]) { aM[i] = true; bM[j] = true; matches++; break }
++            }
++        }
++        if (matches == 0) return 0.0
++        var t = 0; var k = 0
++        for (i in a.indices) if (aM[i]) { while (!bM[k]) k++; if (a[i] != b[k]) t++; k++ }
++        val m = matches.toDouble()
++        val jaro = (m / a.length + m / b.length + (m - t / 2.0) / m) / 3.0
++        var prefix = 0
++        while (prefix < min(4, min(a.length, b.length)) && a[prefix] == b[prefix]) prefix++
++        return jaro + prefix * 0.1 * (1 - jaro)
++    }
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/domain/jobs/FollowUpPlanner.kt ia-mode/frontend/app/src/main/java/com/iamode/app/domain/jobs/FollowUpPlanner.kt
+--- a/frontend/app/src/main/java/com/iamode/app/domain/jobs/FollowUpPlanner.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/domain/jobs/FollowUpPlanner.kt	2026-09-26 08:50:19.244036887 +0000
+@@ -0,0 +1,77 @@
++package com.iamode.app.domain.jobs
++
++enum class ReminderType(val title: String) {
++    FOLLOW_UP_APPLICATION("No reply yet. Send a polite follow-up?"),
++    FOLLOW_UP_INTERVIEW("It's been a few days since your interview. Follow up?"),
++    DEADLINE_SOON("Deadline within 24 hours"),
++    OFFER_DEADLINE("Offer response due soon"),
++    MARK_GHOSTED("No response for 30 days"),
++}
++
++data class PlannerInput(
++    val id: String,
++    val stage: ApplicationStage,
++    val lastActivityAt: Long,
++    val nextStepAt: Long?,
++    val lastFollowUpAt: Long?,
++    val followUpsSent: Int,
++)
++
++data class Reminder(val applicationId: String, val type: ReminderType)
++
++/** Daily: what deserves a nudge. Every suggestion still needs the user's approval to act. */
++object FollowUpPlanner {
++    const val DAY = 86_400_000L
++    const val FOLLOW_UP_AFTER_APPLY_DAYS = 14
++    const val FOLLOW_UP_AFTER_INTERVIEW_DAYS = 5
++    const val GHOSTED_AFTER_DAYS = 30
++    const val MAX_FOLLOW_UPS = 2
++
++    fun plan(apps: List<PlannerInput>, now: Long): List<Reminder> = apps.mapNotNull { a ->
++        val idle = (now - a.lastActivityAt) / DAY
++        val sinceFollowUp = a.lastFollowUpAt?.let { (now - it) / DAY }
++        val canFollowUp = a.followUpsSent < MAX_FOLLOW_UPS && (sinceFollowUp == null || sinceFollowUp >= FOLLOW_UP_AFTER_APPLY_DAYS)
++        val dueIn = a.nextStepAt?.let { it - now }
++        when {
++            a.stage.terminal || a.stage == ApplicationStage.SAVED -> null
++            a.stage == ApplicationStage.OFFER && dueIn != null && dueIn in 0..(2 * DAY) -> Reminder(a.id, ReminderType.OFFER_DEADLINE)
++            (a.stage == ApplicationStage.ASSESSMENT || a.stage == ApplicationStage.INTERVIEW) && dueIn != null && dueIn in 0..DAY ->
++                Reminder(a.id, ReminderType.DEADLINE_SOON)
++            a.stage.order <= ApplicationStage.INTERVIEW.order && idle >= GHOSTED_AFTER_DAYS -> Reminder(a.id, ReminderType.MARK_GHOSTED)
++            a.stage == ApplicationStage.INTERVIEW && idle >= FOLLOW_UP_AFTER_INTERVIEW_DAYS && canFollowUp ->
++                Reminder(a.id, ReminderType.FOLLOW_UP_INTERVIEW)
++            a.stage == ApplicationStage.APPLIED && idle >= FOLLOW_UP_AFTER_APPLY_DAYS && canFollowUp ->
++                Reminder(a.id, ReminderType.FOLLOW_UP_APPLICATION)
++            else -> null
++        }
++    }
++}
++
++data class InsightInput(val maxStage: ApplicationStage, val stage: ApplicationStage, val appliedAt: Long?, val firstResponseAt: Long?)
++
++data class Funnel(
++    val total: Int, val applied: Int, val assessment: Int, val interview: Int, val offer: Int,
++    val rejected: Int, val noResponse: Int, val responseRatePercent: Int, val averageDaysToResponse: Double?,
++)
++
++object ApplicationInsights {
++    /** "Reached" counts: an application that got to Interview also counts toward Applied and Assessment. */
++    fun funnel(apps: List<InsightInput>): Funnel {
++        val tracked = apps.filter { it.maxStage != ApplicationStage.SAVED }
++        fun reached(s: ApplicationStage) = tracked.count { it.maxStage.order >= s.order }
++        val responded = tracked.filter { it.appliedAt != null && it.firstResponseAt != null && it.firstResponseAt >= it.appliedAt }
++        val base = tracked.count { it.appliedAt != null }
++        return Funnel(
++            total = tracked.size,
++            applied = reached(ApplicationStage.APPLIED),
++            assessment = reached(ApplicationStage.ASSESSMENT),
++            interview = reached(ApplicationStage.INTERVIEW),
++            offer = reached(ApplicationStage.OFFER),
++            rejected = tracked.count { it.stage == ApplicationStage.REJECTED },
++            noResponse = tracked.count { it.stage == ApplicationStage.GHOSTED },
++            responseRatePercent = if (base == 0) 0 else responded.size * 100 / base,
++            averageDaysToResponse = responded.takeIf { it.isNotEmpty() }
++                ?.map { (it.firstResponseAt!! - it.appliedAt!!) / FollowUpPlanner.DAY.toDouble() }?.average(),
++        )
++    }
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/domain/jobs/JobModels.kt ia-mode/frontend/app/src/main/java/com/iamode/app/domain/jobs/JobModels.kt
+--- a/frontend/app/src/main/java/com/iamode/app/domain/jobs/JobModels.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/domain/jobs/JobModels.kt	2026-09-26 08:50:19.237198118 +0000
+@@ -0,0 +1,90 @@
++package com.iamode.app.domain.jobs
++
++/** Where an application stands. [order] only ever increases from email evidence. */
++enum class ApplicationStage(val label: String, val order: Int, val terminal: Boolean) {
++    SAVED("Saved", 0, false),
++    APPLIED("Applied", 1, false),
++    ASSESSMENT("Assessment", 2, false),
++    INTERVIEW("Interview", 3, false),
++    SELECTED("Selected", 4, false),
++    OFFER("Offer", 5, false),
++    ACCEPTED("Accepted", 6, true),
++    DECLINED("Declined", 6, true),
++    REJECTED("Not selected", 6, true),
++    GHOSTED("No response", 6, true);
++
++    val active: Boolean get() = !terminal && this != SAVED
++
++    companion object {
++        /** Stage names used by the backend's mail intelligence ("application.stage" / opportunity status). */
++        fun fromApi(v: String?): ApplicationStage? = when (v?.lowercase()) {
++            "applied" -> APPLIED
++            "assessment" -> ASSESSMENT
++            "interview" -> INTERVIEW
++            "selected" -> SELECTED
++            "offer" -> OFFER
++            "rejected" -> REJECTED
++            else -> null
++        }
++    }
++}
++
++enum class ApplicationEventType(val label: String) {
++    CREATED("Tracking started"), APPLIED("Application received"), ASSESSMENT("Assessment"), INTERVIEW("Interview"),
++    SELECTED("Selected"), OFFER("Offer received"), REJECTED("Not selected"), GHOSTED("Marked as no response"),
++    FOLLOW_UP_SENT("Follow-up sent"), STAGE_CHANGED("Stage changed"), NOTE("Note");
++
++    companion object {
++        fun forStage(s: ApplicationStage): ApplicationEventType = when (s) {
++            ApplicationStage.APPLIED -> APPLIED
++            ApplicationStage.ASSESSMENT -> ASSESSMENT
++            ApplicationStage.INTERVIEW -> INTERVIEW
++            ApplicationStage.SELECTED -> SELECTED
++            ApplicationStage.OFFER -> OFFER
++            ApplicationStage.REJECTED -> REJECTED
++            ApplicationStage.GHOSTED -> GHOSTED
++            else -> STAGE_CHANGED
++        }
++    }
++}
++
++enum class ApplicationSource { EMAIL, MANUAL, SHARED_LINK }
++
++object StageMachine {
++    /**
++     * Email evidence only moves an application forward, so re-synced or out-of-order mail
++     * ("application received" arriving after the interview invite) never moves it back.
++     * A rejection ends any active application. New activity revives one marked "no response".
++     * User choices (manual stage changes) are applied directly and are not handled here.
++     */
++    fun fromEvidence(current: ApplicationStage, evidence: ApplicationStage): ApplicationStage = when {
++        current == ApplicationStage.GHOSTED -> evidence
++        current.terminal -> current
++        evidence == ApplicationStage.REJECTED -> ApplicationStage.REJECTED
++        evidence.terminal -> current
++        evidence.order > current.order -> evidence
++        else -> current
++    }
++}
++
++/** What IA Mode knows about one tracked application (for matching and planning). */
++data class TrackedApplication(
++    val id: String,
++    val company: String?,
++    val role: String?,
++    val stage: ApplicationStage,
++    val lastActivityAt: Long,
++    val threadIds: Set<String>,
++    val senderDomains: Set<String>,
++    val referenceId: String?,
++)
++
++/** What one career email says. */
++data class ApplicationEvidence(
++    val threadId: String,
++    val fromAddress: String,
++    val company: String?,
++    val role: String?,
++    val referenceId: String?,
++    val stage: ApplicationStage?,
++)
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/domain/jobs/SharedJobParser.kt ia-mode/frontend/app/src/main/java/com/iamode/app/domain/jobs/SharedJobParser.kt
+--- a/frontend/app/src/main/java/com/iamode/app/domain/jobs/SharedJobParser.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/domain/jobs/SharedJobParser.kt	2026-09-26 08:54:06.260292726 +0000
+@@ -0,0 +1,46 @@
++package com.iamode.app.domain.jobs
++
++/** What a shared job link tells us. The user always confirms before anything is saved. */
++data class SharedJob(val company: String?, val role: String?, val url: String?, val source: String?)
++
++/**
++ * Parses text shared from job apps (LinkedIn, Naukri, Indeed, Instahyre…) via Android's share sheet.
++ * Formats vary, so this is best-effort; everything stays editable.
++ */
++object SharedJobParser {
++    private val urlRe = Regex("""https?://[^\s<>"']+""")
++    private val patterns = listOf(
++        // "Check out this job at ABC Technologies: Android Developer"
++        Regex("""job at (.+?):\s*(.+)""", RegexOption.IGNORE_CASE) to (1 to 2),
++        // "Android Developer at ABC Technologies" / "Android Developer - ABC Technologies"
++        Regex("""^(.+?)\s+(?:at|@|-|–|\|)\s+(.+?)$""", RegexOption.IGNORE_CASE) to (2 to 1),
++        // "ABC Technologies is hiring a Android Developer"
++        Regex("""^(.+?) is hiring (?:an? )?(.+)$""", RegexOption.IGNORE_CASE) to (1 to 2),
++    )
++
++    fun parse(text: String): SharedJob {
++        val url = urlRe.find(text)?.value?.trimEnd('.', ',', ')')
++        val source = url?.let { sourceOf(it) }
++        val firstLine = text.replace(urlRe, " ").lines().map { it.trim() }.firstOrNull { it.length in 3..160 }
++        var company: String? = null
++        var role: String? = null
++        if (firstLine != null) {
++            for ((re, groups) in patterns) {
++                val m = re.find(firstLine) ?: continue
++                company = clean(m.groupValues[groups.first])
++                role = clean(m.groupValues[groups.second])
++                break
++            }
++        }
++        return SharedJob(company, role, url, source)
++    }
++
++    fun sourceOf(url: String): String? {
++        val host = url.substringAfter("://").substringBefore('/').lowercase().removePrefix("www.")
++        return listOf("linkedin", "naukri", "indeed", "instahyre", "foundit", "internshala", "wellfound", "glassdoor", "hirist",
++            "cutshort", "iimjobs", "unstop").firstOrNull { host.contains(it) }
++    }
++
++    private fun clean(s: String) = s.trim().trim('"', '\'', ':', '-', '|').replace(Regex("\\s+"), " ")
++        .removeSuffix(" job").ifBlank { null }?.take(120)
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/domain/mail/MailModels.kt ia-mode/frontend/app/src/main/java/com/iamode/app/domain/mail/MailModels.kt
+--- a/frontend/app/src/main/java/com/iamode/app/domain/mail/MailModels.kt	2026-09-26 09:01:15.263142163 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/domain/mail/MailModels.kt	2026-09-26 08:54:06.256996751 +0000
+@@ -173,6 +173,7 @@
+     SEND_REPLY("Send reply", true),
+     CREATE_CALENDAR_EVENT("Add to calendar", true),
+     UNSUBSCRIBE_EMAIL("Unsubscribe by email", true),
++    SEND_FOLLOW_UP("Send follow-up", true),
+     REVIEW_EMAIL("Review email", false),
+ }
+ 
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/domain/mail/MailPolicyEngine.kt ia-mode/frontend/app/src/main/java/com/iamode/app/domain/mail/MailPolicyEngine.kt
+--- a/frontend/app/src/main/java/com/iamode/app/domain/mail/MailPolicyEngine.kt	2026-09-26 09:01:15.263128608 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/domain/mail/MailPolicyEngine.kt	2026-09-26 08:54:06.257227233 +0000
+@@ -41,7 +41,8 @@
+         }
+ 
+         return when (a.type) {
+-            MailActionType.SEND_DOCUMENT_REPLY, MailActionType.SEND_REPLY, MailActionType.UNSUBSCRIBE_EMAIL -> {
++            MailActionType.SEND_DOCUMENT_REPLY, MailActionType.SEND_REPLY, MailActionType.UNSUBSCRIBE_EMAIL,
++            MailActionType.SEND_FOLLOW_UP -> {
+                 val to = a.recipient?.trim()?.lowercase()
+                     ?: return PolicyDecision.Denied("No recipient")
+                 // The AI can't redirect mail: replies only go to the sender or their Reply-To.
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/domain/mail/WritingStyle.kt ia-mode/frontend/app/src/main/java/com/iamode/app/domain/mail/WritingStyle.kt
+--- a/frontend/app/src/main/java/com/iamode/app/domain/mail/WritingStyle.kt	2026-09-26 09:01:15.263156903 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/domain/mail/WritingStyle.kt	2026-09-26 08:52:25.069624363 +0000
+@@ -17,9 +17,16 @@
+ )
+ 
+ object WritingStyleAnalyzer {
+-    private val greetingRe = Regex("""^(hi|hello|hey|dear|greetings|good (morning|afternoon|evening)|namaste|hii+)\b""", RegexOption.IGNORE_CASE)
++    // English plus common Indian greetings (native script and romanized)
++    private val greetingRe = Regex(
++        """^(hi|hello|hey|dear|greetings|good (morning|afternoon|evening)|namaste|namaskar(am)?|vanakkam|hii+|""" +
++            """नमस्ते|नमस्कार|प्रिय|आदरणीय|నమస్కారం|నమస్తే|ప్రియమైన|வணக்கம்|ನಮಸ್ಕಾರ|നമസ്കാരം)(?=[\s,!.]|$)""",
++        RegexOption.IGNORE_CASE,
++    )
+     private val signOffRe = Regex(
+-        """^(regards|best regards|kind regards|warm regards|thanks( (and|&) regards)?|thank you|many thanks|best|cheers|sincerely|yours (sincerely|truly|faithfully)|thanks!?)\b""",
++        """^(regards|best regards|kind regards|warm regards|thanks( (and|&) regards)?|thank you|many thanks|best|cheers|sincerely|""" +
++            """yours (sincerely|truly|faithfully)|thanks!?|dhanyavad(amulu)?|dhanyavaad|""" +
++            """धन्यवाद|सादर|भवदीय|ధన్యవాదాలు|ధన్యవాదములు|కృతజ్ఞతలు|இப்படிக்கு|நன்றி|ಧನ್ಯವಾದಗಳು|നന്ദി)(?=[\s,!.]|$)""",
+         RegexOption.IGNORE_CASE,
+     )
+     private val quoteStart = Regex("""^(on .{5,120} wrote:|-----\s*original message|from: .+@.+|sent from my )""", RegexOption.IGNORE_CASE)
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/domain/model/UserSettings.kt ia-mode/frontend/app/src/main/java/com/iamode/app/domain/model/UserSettings.kt
+--- a/frontend/app/src/main/java/com/iamode/app/domain/model/UserSettings.kt	2026-09-26 09:01:15.263312712 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/domain/model/UserSettings.kt	2026-09-26 08:55:52.439849572 +0000
+@@ -44,6 +44,10 @@
+     val gmailLabels: Boolean = false,
+     /** Drafts sound like you: greeting, sign-off, length and tone learned from your sent mail. */
+     val matchWritingStyle: Boolean = true,
++    /** "auto" = reply in the email's language and script; otherwise an ISO code (en, te, hi, ta, kn, ml). */
++    val mailReplyLanguage: String = "auto",
++    /** Daily nudges for follow-ups, deadlines and offers in the job tracker. */
++    val jobReminders: Boolean = true,
+ ) {
+     /** Every name that counts as a mention in a group. */
+     val mentionNames: List<String>
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/ApplicationDetailScreen.kt ia-mode/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/ApplicationDetailScreen.kt
+--- a/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/ApplicationDetailScreen.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/ApplicationDetailScreen.kt	2026-09-26 08:59:11.748731670 +0000
+@@ -0,0 +1,243 @@
++package com.iamode.app.ui.feature.jobs
++
++import android.content.Intent
++import android.net.Uri
++import androidx.compose.foundation.Canvas
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.ExperimentalLayoutApi
++import androidx.compose.foundation.layout.FlowRow
++import androidx.compose.foundation.layout.IntrinsicSize
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxHeight
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.automirrored.filled.ArrowBack
++import androidx.compose.material.icons.filled.Delete
++import androidx.compose.material3.AlertDialog
++import androidx.compose.material3.Button
++import androidx.compose.material3.Card
++import androidx.compose.material3.CardDefaults
++import androidx.compose.material3.DropdownMenu
++import androidx.compose.material3.DropdownMenuItem
++import androidx.compose.material3.ExperimentalMaterial3Api
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.OutlinedButton
++import androidx.compose.material3.OutlinedTextField
++import androidx.compose.material3.Scaffold
++import androidx.compose.material3.SnackbarHost
++import androidx.compose.material3.SnackbarHostState
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.material3.TopAppBar
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.geometry.Offset
++import androidx.compose.ui.platform.LocalContext
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
++import androidx.hilt.navigation.compose.hiltViewModel
++import androidx.lifecycle.SavedStateHandle
++import androidx.lifecycle.ViewModel
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import androidx.lifecycle.viewModelScope
++import com.iamode.app.core.database.entity.ApplicationEventEntity
++import com.iamode.app.data.jobs.JobTrackerRepository
++import com.iamode.app.domain.jobs.ApplicationEventType
++import com.iamode.app.domain.jobs.ApplicationStage
++import com.iamode.app.ui.components.rememberHaptics
++import com.iamode.app.ui.feature.mail.SenderAvatar
++import dagger.hilt.android.lifecycle.HiltViewModel
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.SharingStarted
++import kotlinx.coroutines.flow.stateIn
++import kotlinx.coroutines.launch
++import java.time.Instant
++import java.time.ZoneId
++import java.time.format.DateTimeFormatter
++import javax.inject.Inject
++
++@HiltViewModel
++class ApplicationDetailViewModel @Inject constructor(
++    saved: SavedStateHandle,
++    private val tracker: JobTrackerRepository,
++) : ViewModel() {
++    val id: String = checkNotNull(saved["id"])
++    val app = tracker.application(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
++    val events = tracker.events(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
++    val message = MutableStateFlow<String?>(null)
++
++    fun setStage(s: ApplicationStage) = viewModelScope.launch { tracker.setStage(id, s) }
++    fun save(company: String, role: String, location: String, url: String, notes: String) =
++        viewModelScope.launch { tracker.updateDetails(id, company, role, location, url, notes); message.value = "Saved" }
++    fun note(text: String) = viewModelScope.launch { tracker.addNote(id, text) }
++    fun delete(then: () -> Unit) = viewModelScope.launch { tracker.delete(id); then() }
++    fun followUp(open: (String) -> Unit) = viewModelScope.launch {
++        tracker.proposeFollowUp(id)?.let(open) ?: run { message.value = "No recruiter email to reply to yet" }
++    }
++}
++
++private val when_ = DateTimeFormatter.ofPattern("MMM d, h:mm a")
++private fun fmt(ms: Long) = when_.format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
++
++@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
++@Composable
++fun ApplicationDetailScreen(
++    onBack: () -> Unit, openEmail: (String) -> Unit, openReply: (String) -> Unit, vm: ApplicationDetailViewModel = hiltViewModel(),
++) {
++    val a by vm.app.collectAsStateWithLifecycle()
++    val events by vm.events.collectAsStateWithLifecycle()
++    val message by vm.message.collectAsStateWithLifecycle()
++    val snackbar = remember { SnackbarHostState() }
++    val context = LocalContext.current
++    val haptics = rememberHaptics()
++    var stageMenu by remember { mutableStateOf(false) }
++    var confirmDelete by remember { mutableStateOf(false) }
++    var editing by remember { mutableStateOf(false) }
++    var newNote by remember { mutableStateOf("") }
++    LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.message.value = null } }
++
++    Scaffold(
++        topBar = {
++            TopAppBar(title = { Text("Application") },
++                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
++                actions = { IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Filled.Delete, "Delete") } })
++        },
++        snackbarHost = { SnackbarHost(snackbar) },
++    ) { padding ->
++        val app = a ?: return@Scaffold
++        val stage = JobTrackerRepository.stageOf(app.stage)
++        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
++            verticalArrangement = Arrangement.spacedBy(14.dp)) {
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                SenderAvatar(app.company ?: "?", stage.accent(), 56)
++                Spacer(Modifier.width(14.dp))
++                Column(Modifier.weight(1f)) {
++                    Text(app.role ?: "Role not set", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
++                    Text(app.company ?: "Company not set", style = MaterialTheme.typography.titleMedium)
++                    app.location?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
++                }
++            }
++            Box {
++                Row(Modifier.clickable { stageMenu = true }, verticalAlignment = Alignment.CenterVertically) {
++                    StageChip(stage); Spacer(Modifier.width(8.dp))
++                    Text("Change", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
++                }
++                DropdownMenu(stageMenu, { stageMenu = false }) {
++                    ApplicationStage.entries.forEach { s ->
++                        DropdownMenuItem(text = { Text("${s.glyph()}  ${s.label}") }, onClick = { stageMenu = false; haptics.tick(); vm.setStage(s) })
++                    }
++                }
++            }
++
++            FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
++                Fact("Applied", app.appliedAt?.let { daysAgo(it) } ?: "—")
++                Fact("Last update", daysAgo(app.lastActivityAt))
++                app.atsPlatform?.let { Fact("Via", it.replaceFirstChar { c -> c.uppercase() }) }
++                app.referenceId?.let { Fact("Reference", it) }
++                if (app.followUpsSent > 0) Fact("Follow-ups", "${app.followUpsSent}")
++            }
++
++            if (app.nextStepNote != null || app.nextStepAt != null) {
++                Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = stage.accent().copy(alpha = 0.10f))) {
++                    Column(Modifier.padding(14.dp)) {
++                        Text("Next step", style = MaterialTheme.typography.labelLarge, color = stage.accent())
++                        app.nextStepNote?.let { Text(it, style = MaterialTheme.typography.bodyLarge) }
++                        app.nextStepAt?.let { Text("By ${fmt(it)}", style = MaterialTheme.typography.bodySmall) }
++                    }
++                }
++            }
++
++            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++                if (!stage.terminal && app.recruiterEmail != null) Button(onClick = { haptics.tick(); vm.followUp(openReply) }) { Text("✉  Follow up") }
++                app.jobUrl?.let { url -> OutlinedButton(onClick = {
++                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
++                }) { Text("Open job") } }
++                app.lastEmailId?.let { id -> OutlinedButton(onClick = { openEmail(id) }) { Text("Latest email") } }
++            }
++
++            if (editing) EditDetails(app.company.orEmpty(), app.role.orEmpty(), app.location.orEmpty(), app.jobUrl.orEmpty(), app.notes.orEmpty(),
++                onCancel = { editing = false }) { c, r, l, u, n -> editing = false; vm.save(c, r, l, u, n) }
++            else {
++                app.notes?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
++                TextButton(onClick = { editing = true }) { Text("Edit details") }
++            }
++
++            Text("Timeline", style = MaterialTheme.typography.titleMedium)
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                OutlinedTextField(newNote, { newNote = it.take(500) }, placeholder = { Text("Add a note") }, singleLine = true,
++                    modifier = Modifier.weight(1f))
++                TextButton(onClick = { vm.note(newNote); newNote = "" }, enabled = newNote.isNotBlank()) { Text("Add") }
++            }
++            events.forEachIndexed { i, e -> TimelineRow(e, last = i == events.lastIndex, openEmail) }
++        }
++    }
++
++    if (confirmDelete) AlertDialog(
++        onDismissRequest = { confirmDelete = false },
++        title = { Text("Delete this application?") },
++        text = { Text("Its timeline is removed from IA Mode. Your emails aren't touched.") },
++        confirmButton = { TextButton(onClick = { confirmDelete = false; vm.delete(onBack) }) { Text("Delete") } },
++        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
++    )
++}
++
++@Composable
++private fun Fact(label: String, value: String) = Column {
++    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
++    Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
++}
++
++/** A vertical line with a dot per event; tapping an email event opens that email. */
++@Composable
++private fun TimelineRow(e: ApplicationEventEntity, last: Boolean, openEmail: (String) -> Unit) {
++    val type = runCatching { ApplicationEventType.valueOf(e.type) }.getOrDefault(ApplicationEventType.NOTE)
++    val color = MaterialTheme.colorScheme.primary
++    val line = MaterialTheme.colorScheme.outlineVariant
++    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).then(if (e.emailId != null) Modifier.clickable { openEmail(e.emailId) } else Modifier)) {
++        Canvas(Modifier.width(24.dp).fillMaxHeight()) {
++            val x = size.width / 2
++            if (!last) drawLine(line, Offset(x, 14.dp.toPx()), Offset(x, size.height), strokeWidth = 2.dp.toPx())
++            drawCircle(color, radius = 5.dp.toPx(), center = Offset(x, 9.dp.toPx()))
++        }
++        Column(Modifier.padding(start = 8.dp, bottom = 16.dp)) {
++            Text(type.label, style = MaterialTheme.typography.titleSmall)
++            e.detail?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
++            Text(fmt(e.at) + if (e.emailId != null) " · View email" else "", style = MaterialTheme.typography.labelSmall,
++                color = MaterialTheme.colorScheme.onSurfaceVariant)
++        }
++    }
++}
++
++@Composable
++private fun EditDetails(company: String, role: String, location: String, url: String, notes: String, onCancel: () -> Unit,
++                        onSave: (String, String, String, String, String) -> Unit) {
++    var c by remember { mutableStateOf(company) }; var r by remember { mutableStateOf(role) }
++    var l by remember { mutableStateOf(location) }; var u by remember { mutableStateOf(url) }; var n by remember { mutableStateOf(notes) }
++    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
++        OutlinedTextField(c, { c = it.take(120) }, label = { Text("Company") }, singleLine = true, modifier = Modifier.fillMaxWidth())
++        OutlinedTextField(r, { r = it.take(120) }, label = { Text("Role") }, singleLine = true, modifier = Modifier.fillMaxWidth())
++        OutlinedTextField(l, { l = it.take(80) }, label = { Text("Location") }, singleLine = true, modifier = Modifier.fillMaxWidth())
++        OutlinedTextField(u, { u = it.take(500) }, label = { Text("Job link") }, singleLine = true, modifier = Modifier.fillMaxWidth())
++        OutlinedTextField(n, { n = it.take(2000) }, label = { Text("Notes") }, modifier = Modifier.fillMaxWidth())
++        Row { TextButton(onClick = onCancel) { Text("Cancel") }; Button(onClick = { onSave(c, r, l, u, n) }) { Text("Save") } }
++    }
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/ApplicationsScreen.kt ia-mode/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/ApplicationsScreen.kt
+--- a/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/ApplicationsScreen.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/ApplicationsScreen.kt	2026-09-26 08:58:28.929768275 +0000
+@@ -0,0 +1,254 @@
++package com.iamode.app.ui.feature.jobs
++
++import androidx.compose.animation.core.Animatable
++import androidx.compose.animation.core.tween
++import androidx.compose.foundation.background
++import androidx.compose.foundation.interaction.MutableInteractionSource
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.PaddingValues
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxHeight
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.LazyRow
++import androidx.compose.foundation.lazy.itemsIndexed
++import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.automirrored.filled.ArrowBack
++import androidx.compose.material.icons.filled.Add
++import androidx.compose.material3.Button
++import androidx.compose.material3.Card
++import androidx.compose.material3.CardDefaults
++import androidx.compose.material3.ExperimentalMaterial3Api
++import androidx.compose.material3.ExtendedFloatingActionButton
++import androidx.compose.material3.FilterChip
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.ModalBottomSheet
++import androidx.compose.material3.OutlinedTextField
++import androidx.compose.material3.Scaffold
++import androidx.compose.material3.SegmentedButton
++import androidx.compose.material3.SegmentedButtonDefaults
++import androidx.compose.material3.SingleChoiceSegmentedButtonRow
++import androidx.compose.material3.Text
++import androidx.compose.material3.TopAppBar
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import androidx.hilt.navigation.compose.hiltViewModel
++import androidx.lifecycle.SavedStateHandle
++import androidx.lifecycle.ViewModel
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import androidx.lifecycle.viewModelScope
++import com.iamode.app.core.database.entity.JobApplicationEntity
++import com.iamode.app.data.jobs.JobTrackerRepository
++import com.iamode.app.domain.jobs.ApplicationSource
++import com.iamode.app.domain.jobs.ApplicationStage
++import com.iamode.app.domain.jobs.Funnel
++import com.iamode.app.domain.jobs.SharedJob
++import com.iamode.app.domain.jobs.SharedJobParser
++import com.iamode.app.ui.components.AnimatedCounter
++import com.iamode.app.ui.components.EmptyState
++import com.iamode.app.ui.components.Entrance
++import com.iamode.app.ui.components.pressScale
++import com.iamode.app.ui.components.rememberHaptics
++import com.iamode.app.ui.feature.mail.SenderAvatar
++import dagger.hilt.android.lifecycle.HiltViewModel
++import kotlinx.coroutines.flow.SharingStarted
++import kotlinx.coroutines.flow.stateIn
++import kotlinx.coroutines.launch
++import javax.inject.Inject
++
++@HiltViewModel
++class ApplicationsViewModel @Inject constructor(
++    saved: SavedStateHandle,
++    private val tracker: JobTrackerRepository,
++) : ViewModel() {
++    val applications = tracker.applications.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
++    val funnel = tracker.funnel.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
++    /** Pre-filled from the Android share sheet; the user confirms before anything is saved. */
++    val shared: SharedJob? = saved.get<String>("shared")?.takeIf { it.isNotBlank() }?.let(SharedJobParser::parse)
++
++    fun add(company: String, role: String, url: String, location: String, stage: ApplicationStage, fromShare: Boolean, then: (String) -> Unit) =
++        viewModelScope.launch {
++            then(tracker.addManual(company, role, url, if (fromShare) ApplicationSource.SHARED_LINK else ApplicationSource.MANUAL, stage, location))
++        }
++}
++
++private enum class Filter(val label: String, val stages: Set<ApplicationStage>) {
++    ACTIVE("Active", setOf(ApplicationStage.APPLIED, ApplicationStage.ASSESSMENT, ApplicationStage.INTERVIEW, ApplicationStage.SELECTED, ApplicationStage.OFFER)),
++    SAVED("Saved", setOf(ApplicationStage.SAVED)),
++    INTERVIEWS("Interviews", setOf(ApplicationStage.ASSESSMENT, ApplicationStage.INTERVIEW)),
++    OFFERS("Offers", setOf(ApplicationStage.SELECTED, ApplicationStage.OFFER, ApplicationStage.ACCEPTED)),
++    CLOSED("Closed", setOf(ApplicationStage.REJECTED, ApplicationStage.GHOSTED, ApplicationStage.DECLINED, ApplicationStage.ACCEPTED)),
++}
++
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++fun ApplicationsScreen(onBack: () -> Unit, openApplication: (String) -> Unit, vm: ApplicationsViewModel = hiltViewModel()) {
++    val apps by vm.applications.collectAsStateWithLifecycle()
++    val funnel by vm.funnel.collectAsStateWithLifecycle()
++    var filter by remember { mutableStateOf(Filter.ACTIVE) }
++    var adding by remember { mutableStateOf(vm.shared != null) }
++    val seen = remember { mutableSetOf<String>() }
++    val haptics = rememberHaptics()
++
++    Scaffold(
++        topBar = {
++            TopAppBar(title = { Text("Applications", fontWeight = FontWeight.SemiBold) },
++                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
++        },
++        floatingActionButton = {
++            ExtendedFloatingActionButton(onClick = { haptics.tick(); adding = true }, icon = { Icon(Icons.Filled.Add, null) }, text = { Text("Add") })
++        },
++    ) { padding ->
++        val list = apps
++        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
++            verticalArrangement = Arrangement.spacedBy(12.dp)) {
++            funnel?.takeIf { it.total > 0 }?.let { f -> item(key = "funnel") { FunnelCard(f) } }
++            item(key = "filters") {
++                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++                    items(Filter.entries) { fl ->
++                        val n = list?.count { JobTrackerRepository.stageOf(it.stage) in fl.stages } ?: 0
++                        FilterChip(selected = filter == fl, onClick = { haptics.tick(); filter = fl },
++                            label = { Text(if (n > 0) "${fl.label} · $n" else fl.label) })
++                    }
++                }
++            }
++            when {
++                list == null -> Unit
++                list.isEmpty() -> item(key = "empty") {
++                    EmptyState("No applications yet",
++                        "IA Mode adds them from your email (application received, interviews, offers). You can also add one, or share a job from LinkedIn or Naukri to IA Mode.")
++                }
++                else -> {
++                    val shown = list.filter { JobTrackerRepository.stageOf(it.stage) in filter.stages }
++                    if (shown.isEmpty()) item(key = "none") {
++                        Text("Nothing here.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
++                            modifier = Modifier.padding(24.dp))
++                    }
++                    itemsIndexed(shown, key = { _, it -> it.id }) { i, a ->
++                        Box(Modifier.animateItem()) { Entrance("${filter.name}-${a.id}", i, seen) { ApplicationCard(a) { openApplication(a.id) } } }
++                    }
++                }
++            }
++        }
++    }
++
++    if (adding) AddApplicationSheet(vm.shared, onDismiss = { adding = false }) { company, role, url, location, stage ->
++        adding = false
++        vm.add(company, role, url, location, stage, vm.shared != null, openApplication)
++    }
++}
++
++@Composable
++private fun FunnelCard(f: Funnel) {
++    Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
++        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
++            Row(verticalAlignment = Alignment.Bottom) {
++                AnimatedCounter(f.total, style = MaterialTheme.typography.headlineMedium)
++                Spacer(Modifier.width(8.dp))
++                Text("applications", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++            }
++            val max = maxOf(1, f.applied)
++            FunnelBar("Applied", f.applied, max, ApplicationStage.APPLIED.accent(), 0)
++            FunnelBar("Assessment", f.assessment, max, ApplicationStage.ASSESSMENT.accent(), 1)
++            FunnelBar("Interview", f.interview, max, ApplicationStage.INTERVIEW.accent(), 2)
++            FunnelBar("Offer", f.offer, max, ApplicationStage.OFFER.accent(), 3)
++            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
++                Stat("${f.responseRatePercent}%", "got a reply")
++                f.averageDaysToResponse?.let { Stat("%.0f".format(it), "days to hear back") }
++                if (f.rejected + f.noResponse > 0) Stat("${f.rejected + f.noResponse}", "closed")
++            }
++        }
++    }
++}
++
++/** Bars grow in with a stagger, like the funnel is filling up. */
++@Composable
++private fun FunnelBar(label: String, value: Int, max: Int, color: Color, index: Int) {
++    val p = remember { Animatable(0f) }
++    LaunchedEffect(value, max) { kotlinx.coroutines.delay(index * 90L); p.animateTo(value.toFloat() / max, tween(700)) }
++    Row(verticalAlignment = Alignment.CenterVertically) {
++        Text(label, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(84.dp))
++        Box(Modifier.weight(1f).height(14.dp).background(color.copy(alpha = 0.10f), RoundedCornerShape(7.dp))) {
++            Box(Modifier.fillMaxWidth(p.value.coerceIn(0f, 1f)).fillMaxHeight().background(color, RoundedCornerShape(7.dp)))
++        }
++        Spacer(Modifier.width(10.dp))
++        Text("$value", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(28.dp))
++    }
++}
++
++@Composable
++private fun Stat(value: String, label: String) = Column {
++    Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
++    Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
++}
++
++@Composable
++private fun ApplicationCard(a: JobApplicationEntity, onClick: () -> Unit) {
++    val stage = JobTrackerRepository.stageOf(a.stage)
++    val interaction = remember { MutableInteractionSource() }
++    Card(onClick = onClick, interactionSource = interaction, modifier = Modifier.fillMaxWidth().pressScale(interaction),
++        shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
++        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
++            SenderAvatar(a.company ?: "?", stage.accent())
++            Spacer(Modifier.width(12.dp))
++            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
++                Text(a.role ?: "Role not set", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
++                    maxLines = 1, overflow = TextOverflow.Ellipsis)
++                Text(a.company ?: "Company not set", style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
++                Text(listOfNotNull(a.appliedAt?.let { "Applied ${daysAgo(it)}" }, "updated ${daysAgo(a.lastActivityAt)}").joinToString(" · "),
++                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
++                a.nextStepNote?.let { Text("Next: $it", style = MaterialTheme.typography.labelMedium, color = stage.accent(), maxLines = 1,
++                    overflow = TextOverflow.Ellipsis) }
++            }
++            StageChip(stage)
++        }
++    }
++}
++
++@OptIn(ExperimentalMaterial3Api::class)
++@Composable
++fun AddApplicationSheet(prefill: SharedJob?, onDismiss: () -> Unit, onSave: (String, String, String, String, ApplicationStage) -> Unit) {
++    var company by remember { mutableStateOf(prefill?.company.orEmpty()) }
++    var role by remember { mutableStateOf(prefill?.role.orEmpty()) }
++    var url by remember { mutableStateOf(prefill?.url.orEmpty()) }
++    var location by remember { mutableStateOf("") }
++    var stage by remember { mutableStateOf(if (prefill != null) ApplicationStage.SAVED else ApplicationStage.APPLIED) }
++    ModalBottomSheet(onDismissRequest = onDismiss) {
++        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
++            Text(if (prefill != null) "Track this job" else "Add an application", style = MaterialTheme.typography.titleLarge)
++            prefill?.source?.let { Text("From ${it.replaceFirstChar { c -> c.uppercase() }}", style = MaterialTheme.typography.labelMedium) }
++            OutlinedTextField(company, { company = it.take(120) }, label = { Text("Company") }, singleLine = true, modifier = Modifier.fillMaxWidth())
++            OutlinedTextField(role, { role = it.take(120) }, label = { Text("Role") }, singleLine = true, modifier = Modifier.fillMaxWidth())
++            OutlinedTextField(location, { location = it.take(80) }, label = { Text("Location (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
++            OutlinedTextField(url, { url = it.take(500) }, label = { Text("Job link (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
++            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
++                listOf(ApplicationStage.SAVED to "Saved", ApplicationStage.APPLIED to "Applied").forEachIndexed { i, (s, l) ->
++                    SegmentedButton(selected = stage == s, onClick = { stage = s }, shape = SegmentedButtonDefaults.itemShape(i, 2)) { Text(l) }
++                }
++            }
++            Button(onClick = { onSave(company, role, url, location, stage) }, enabled = company.isNotBlank() || role.isNotBlank(),
++                modifier = Modifier.fillMaxWidth()) { Text("Save") }
++        }
++    }
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/JobsDesign.kt ia-mode/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/JobsDesign.kt
+--- a/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/JobsDesign.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/ui/feature/jobs/JobsDesign.kt	2026-09-26 08:58:28.928615178 +0000
+@@ -0,0 +1,60 @@
++package com.iamode.app.ui.feature.jobs
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
++import androidx.compose.ui.unit.sp
++import com.iamode.app.domain.jobs.ApplicationStage
++
++/** Stage colours and glyphs shared by every tracker screen. */
++fun ApplicationStage.accent(): Color = when (this) {
++    ApplicationStage.SAVED -> Color(0xFF94A3B8)
++    ApplicationStage.APPLIED -> Color(0xFF3B82F6)
++    ApplicationStage.ASSESSMENT -> Color(0xFF0EA5E9)
++    ApplicationStage.INTERVIEW -> Color(0xFF7B61FF)
++    ApplicationStage.SELECTED -> Color(0xFFF2B233)
++    ApplicationStage.OFFER, ApplicationStage.ACCEPTED -> Color(0xFF12B886)
++    ApplicationStage.DECLINED -> Color(0xFF64748B)
++    ApplicationStage.REJECTED -> Color(0xFFEF4444)
++    ApplicationStage.GHOSTED -> Color(0xFF94A3B8)
++}
++
++fun ApplicationStage.glyph(): String = when (this) {
++    ApplicationStage.SAVED -> "🔖"; ApplicationStage.APPLIED -> "📨"; ApplicationStage.ASSESSMENT -> "📝"
++    ApplicationStage.INTERVIEW -> "🎯"; ApplicationStage.SELECTED -> "🏆"; ApplicationStage.OFFER -> "💼"
++    ApplicationStage.ACCEPTED -> "✅"; ApplicationStage.DECLINED -> "↩"; ApplicationStage.REJECTED -> "✕"; ApplicationStage.GHOSTED -> "…"
++}
++
++@Composable
++fun StageChip(stage: ApplicationStage, modifier: Modifier = Modifier) {
++    Row(
++        modifier.background(stage.accent().copy(alpha = 0.14f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        Text(stage.glyph(), fontSize = 11.sp)
++        Spacer(Modifier.width(5.dp))
++        Text(stage.label, color = stage.accent(), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
++    }
++}
++
++fun daysAgo(millis: Long?, now: Long = System.currentTimeMillis()): String {
++    millis ?: return "—"
++    val d = ((now - millis) / 86_400_000L).toInt()
++    return when {
++        d <= 0 -> "today"
++        d == 1 -> "yesterday"
++        d < 30 -> "$d days ago"
++        else -> "${d / 30} mo ago"
++    }
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/MailActionsScreen.kt ia-mode/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/MailActionsScreen.kt
+--- a/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/MailActionsScreen.kt	2026-09-26 09:01:15.264864301 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/MailActionsScreen.kt	2026-09-26 08:55:52.438298343 +0000
+@@ -158,6 +158,7 @@
+         MailActionType.CREATE_CALENDAR_EVENT -> "🎯" to (if (card.mail?.primary?.name == "INTERVIEW_INVITATION") "Interview detected" else "Event detected")
+         MailActionType.SEND_REPLY -> "↩" to "Reply suggested"
+         MailActionType.UNSUBSCRIBE_EMAIL -> "📢" to "Unsubscribe"
++        MailActionType.SEND_FOLLOW_UP -> "📨" to "Follow-up ready"
+         MailActionType.REVIEW_EMAIL -> "⚠" to "Review carefully"
+     }
+     val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/MailHomeScreen.kt ia-mode/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/MailHomeScreen.kt
+--- a/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/MailHomeScreen.kt	2026-09-26 09:01:15.264728543 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/MailHomeScreen.kt	2026-09-26 08:59:31.956002004 +0000
+@@ -29,6 +29,7 @@
+ import androidx.compose.material.icons.filled.Archive
+ import androidx.compose.material.icons.filled.Bolt
+ import androidx.compose.material.icons.filled.Unarchive
++import androidx.compose.material.icons.filled.Work
+ import androidx.compose.material3.Badge
+ import androidx.compose.material3.BadgedBox
+ import androidx.compose.material3.Card
+@@ -133,7 +134,8 @@
+ @Composable
+ fun MailHomeScreen(
+     onBack: () -> Unit, openEmail: (String) -> Unit, openActions: () -> Unit, openOpportunities: () -> Unit,
+-    openDocument: (String) -> Unit, openCalendar: (String) -> Unit, vm: MailHomeViewModel = hiltViewModel(),
++    openDocument: (String) -> Unit, openCalendar: (String) -> Unit, openApplications: () -> Unit = {},
++    vm: MailHomeViewModel = hiltViewModel(),
+ ) {
+     val state by vm.state.collectAsStateWithLifecycle()
+     val syncing by vm.syncing.collectAsStateWithLifecycle()
+@@ -149,6 +151,7 @@
+                 title = { Text("Mail", fontWeight = FontWeight.SemiBold) },
+                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                 actions = {
++                    IconButton(onClick = openApplications) { Icon(Icons.Filled.Work, "Job applications") }
+                     IconButton(onClick = openActions) {
+                         BadgedBox(badge = { if (state.pendingCount > 0) Badge { AnimatedCounter(state.pendingCount) } }) {
+                             Icon(Icons.Filled.Bolt, "AI Actions")
+@@ -318,6 +321,7 @@
+             MailActionType.CREATE_CALENDAR_EVENT -> "📅  Review & add to calendar"
+             MailActionType.SEND_REPLY -> "↩  Review suggested reply"
+             MailActionType.UNSUBSCRIBE_EMAIL -> "Review unsubscribe"
++            MailActionType.SEND_FOLLOW_UP -> "📨  Review follow-up"
+             MailActionType.REVIEW_EMAIL -> "Review carefully"
+         }
+     }
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/OpportunitiesScreen.kt ia-mode/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/OpportunitiesScreen.kt
+--- a/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/OpportunitiesScreen.kt	2026-09-26 09:01:15.264797763 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/ui/feature/mail/OpportunitiesScreen.kt	2026-09-26 08:59:31.956205340 +0000
+@@ -86,13 +86,16 @@
+ 
+ @OptIn(ExperimentalMaterial3Api::class)
+ @Composable
+-fun OpportunitiesScreen(onBack: () -> Unit, openEmail: (String) -> Unit, vm: OpportunitiesViewModel = hiltViewModel()) {
++fun OpportunitiesScreen(
++    onBack: () -> Unit, openEmail: (String) -> Unit, openApplications: () -> Unit = {}, vm: OpportunitiesViewModel = hiltViewModel(),
++) {
+     val all by vm.opportunities.collectAsStateWithLifecycle()
+     val pager = rememberPagerState { sections.size }
+     val scope = rememberCoroutineScope()
+     val seen = androidx.compose.runtime.remember { mutableSetOf<String>() }
+     Scaffold(topBar = {
+-        TopAppBar(title = { Text("🎉 Opportunities") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } })
++        TopAppBar(title = { Text("🎉 Opportunities") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
++            actions = { androidx.compose.material3.TextButton(onClick = openApplications) { Text("All applications") } })
+     }) { padding ->
+         Column(Modifier.fillMaxSize().padding(padding)) {
+             PrimaryScrollableTabRow(selectedTabIndex = pager.currentPage, edgePadding = 12.dp) {
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/ui/feature/settings/EmailIntelligenceSection.kt ia-mode/frontend/app/src/main/java/com/iamode/app/ui/feature/settings/EmailIntelligenceSection.kt
+--- a/frontend/app/src/main/java/com/iamode/app/ui/feature/settings/EmailIntelligenceSection.kt	2026-09-26 09:01:15.264937378 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/ui/feature/settings/EmailIntelligenceSection.kt	2026-09-26 08:59:44.803879980 +0000
+@@ -17,6 +17,7 @@
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.LaunchedEffect
+ import androidx.compose.runtime.getValue
++import androidx.compose.runtime.setValue
+ import androidx.hilt.navigation.compose.hiltViewModel
+ import androidx.lifecycle.ViewModel
+ import androidx.lifecycle.compose.collectAsStateWithLifecycle
+@@ -125,6 +126,27 @@
+         SettingRow("IA Mode labels in Gmail", "Adds labels like \"IA Mode/Interviews\" in Gmail. Never moves or deletes mail") {
+             Switch(s.gmailLabels, { v -> vm.update { it.copy(gmailLabels = v) } })
+         }
++        SectionTitle("Reply language")
++        var langMenu by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
++        val langs = listOf("auto" to "Same as the email", "en" to "English", "te" to "తెలుగు (Telugu)", "hi" to "हिन्दी (Hindi)",
++            "ta" to "தமிழ் (Tamil)", "kn" to "ಕನ್ನಡ (Kannada)", "ml" to "മലയാളം (Malayalam)")
++        androidx.compose.foundation.layout.Box {
++            SettingRow("Write email replies in", langs.firstOrNull { it.first == s.mailReplyLanguage }?.second ?: "Same as the email",
++                onClick = { langMenu = true })
++            androidx.compose.material3.DropdownMenu(langMenu, { langMenu = false }) {
++                langs.forEach { (code, label) ->
++                    androidx.compose.material3.DropdownMenuItem(text = { Text(label) }, onClick = {
++                        langMenu = false; vm.update { it.copy(mailReplyLanguage = code) }
++                    })
++                }
++            }
++        }
++
++        SectionTitle("Job tracker")
++        SettingRow("Follow-up reminders", "Nudges for follow-ups, assessment deadlines and offer replies. Nothing is sent without you") {
++            Switch(s.jobReminders, { v -> vm.update { it.copy(jobReminders = v) } })
++        }
++
+         SectionTitle("Writing style")
+         SettingRow("Write replies in my style", "Greeting, sign-off, length and tone learned on this phone from your sent mail") {
+             Switch(s.matchWritingStyle, { v -> vm.update { it.copy(matchWritingStyle = v) } })
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/main/java/com/iamode/app/ui/navigation/AppNavHost.kt ia-mode/frontend/app/src/main/java/com/iamode/app/ui/navigation/AppNavHost.kt
+--- a/frontend/app/src/main/java/com/iamode/app/ui/navigation/AppNavHost.kt	2026-09-26 09:01:15.265026253 +0000
++++ b/frontend/app/src/main/java/com/iamode/app/ui/navigation/AppNavHost.kt	2026-09-26 08:59:31.955550672 +0000
+@@ -39,6 +39,8 @@
+ import com.iamode.app.ui.feature.settings.SettingsScreen
+ import com.iamode.app.ui.feature.summary.SummaryScreen
+ import com.iamode.app.ui.feature.mail.MailActionsScreen
++import com.iamode.app.ui.feature.jobs.ApplicationDetailScreen
++import com.iamode.app.ui.feature.jobs.ApplicationsScreen
+ import com.iamode.app.ui.feature.mail.InterviewCalendarScreen
+ import com.iamode.app.ui.feature.mail.MailDetailScreen
+ import com.iamode.app.ui.feature.mail.MailHomeScreen
+@@ -68,6 +70,10 @@
+     const val MAIL_REPLY = "mail-reply/{actionId}"
+     const val MAIL_CALENDAR = "mail-calendar/{actionId}"
+     const val OPPORTUNITIES = "opportunities"
++    const val APPLICATIONS = "applications?shared={shared}"
++    const val APPLICATION = "application/{id}"
++    fun applications(shared: String? = null) = if (shared == null) "applications" else "applications?shared=${Uri.encode(shared)}"
++    fun application(id: String) = "application/$id"
+     fun mailDetail(emailId: String) = "mail/${Uri.encode(emailId)}"
+     fun mailReply(actionId: String) = "mail-reply/$actionId"
+     fun mailCalendar(actionId: String) = "mail-calendar/$actionId"
+@@ -83,12 +89,19 @@
+     data class Conversation(val id: String) : DeepLink
+     data class Summary(val sessionId: String) : DeepLink
+     data class Mail(val emailId: String) : DeepLink
++    data class Application(val id: String) : DeepLink
++    /** Text shared from a job app (LinkedIn, Naukri…) via the Android share sheet. */
++    data class SharedJob(val text: String) : DeepLink
+ 
+     companion object {
+         fun from(intent: android.content.Intent?): DeepLink? {
+             intent ?: return null
+             intent.getStringExtra(com.iamode.app.MainActivity.EXTRA_SESSION_ID)?.let { return Summary(it) }
+             intent.getStringExtra(com.iamode.app.MainActivity.EXTRA_EMAIL_ID)?.let { return Mail(it) }
++            intent.getStringExtra(com.iamode.app.MainActivity.EXTRA_APPLICATION_ID)?.let { return Application(it) }
++            if (intent.action == android.content.Intent.ACTION_SEND && intent.type == "text/plain") {
++                intent.getStringExtra(android.content.Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }?.let { return SharedJob(it.take(2000)) }
++            }
+             intent.getStringExtra(com.iamode.app.MainActivity.EXTRA_CONVERSATION_ID)?.let { return Conversation(it) }
+             return null
+         }
+@@ -146,6 +159,8 @@
+                 is DeepLink.Conversation -> Routes.conversation(deepLink.id)
+                 is DeepLink.Summary -> Routes.summary(deepLink.sessionId)
+                 is DeepLink.Mail -> Routes.mailDetail(deepLink.emailId)
++                is DeepLink.Application -> Routes.application(deepLink.id)
++                is DeepLink.SharedJob -> Routes.applications(shared = deepLink.text)
+             }
+             nav.navigate(route) { launchSingleTop = true }
+             onDeepLinkHandled()
+@@ -233,6 +248,7 @@
+                         openOpportunities = { nav.navigate(Routes.OPPORTUNITIES) },
+                         openDocument = { nav.navigate(Routes.mailReply(it)) },
+                         openCalendar = { nav.navigate(Routes.mailCalendar(it)) },
++                        openApplications = { nav.navigate(Routes.applications()) },
+                     )
+                 }
+                 screen(Routes.MAIL_DETAIL, arguments = listOf(navArgument("emailId") { type = NavType.StringType })) {
+@@ -249,7 +265,20 @@
+                     InterviewCalendarScreen(onBack = { nav.popBackStack() })
+                 }
+                 screen(Routes.OPPORTUNITIES) {
+-                    OpportunitiesScreen(onBack = { nav.popBackStack() }, openEmail = { nav.navigate(Routes.mailDetail(it)) })
++                    OpportunitiesScreen(onBack = { nav.popBackStack() }, openEmail = { nav.navigate(Routes.mailDetail(it)) },
++                        openApplications = { nav.navigate(Routes.applications()) })
++                }
++                screen(Routes.APPLICATIONS, arguments = listOf(navArgument("shared") {
++                    type = NavType.StringType; nullable = true; defaultValue = null
++                })) {
++                    ApplicationsScreen(onBack = { nav.popBackStack() }, openApplication = { nav.navigate(Routes.application(it)) })
++                }
++                screen(Routes.APPLICATION, arguments = listOf(navArgument("id") { type = NavType.StringType })) {
++                    ApplicationDetailScreen(
++                        onBack = { nav.popBackStack() },
++                        openEmail = { nav.navigate(Routes.mailDetail(it)) },
++                        openReply = { nav.navigate(Routes.mailReply(it)) },
++                    )
+                 }
+             }
+         }
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/test/java/com/iamode/app/domain/JobTrackerTest.kt ia-mode/frontend/app/src/test/java/com/iamode/app/domain/JobTrackerTest.kt
+--- a/frontend/app/src/test/java/com/iamode/app/domain/JobTrackerTest.kt	1970-01-01 00:00:00.000000000 +0000
++++ b/frontend/app/src/test/java/com/iamode/app/domain/JobTrackerTest.kt	2026-09-26 08:54:43.129213805 +0000
+@@ -0,0 +1,147 @@
++package com.iamode.app.domain
++
++import com.iamode.app.domain.jobs.ApplicationEvidence
++import com.iamode.app.domain.jobs.ApplicationInsights
++import com.iamode.app.domain.jobs.ApplicationMatcher
++import com.iamode.app.domain.jobs.ApplicationStage
++import com.iamode.app.domain.jobs.FollowUpPlanner
++import com.iamode.app.domain.jobs.InsightInput
++import com.iamode.app.domain.jobs.MatchResult
++import com.iamode.app.domain.jobs.PlannerInput
++import com.iamode.app.domain.jobs.ReminderType
++import com.iamode.app.domain.jobs.StageMachine
++import com.iamode.app.domain.jobs.TrackedApplication
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertTrue
++import org.junit.Test
++
++class JobTrackerTest {
++    private val day = FollowUpPlanner.DAY
++    private val now = 1_790_000_000_000L
++
++    private fun app(id: String, company: String?, role: String?, stage: ApplicationStage = ApplicationStage.APPLIED,
++                    threads: Set<String> = emptySet(), domains: Set<String> = emptySet(), ref: String? = null) =
++        TrackedApplication(id, company, role, stage, now, threads, domains, ref)
++
++    private fun ev(from: String, company: String? = null, role: String? = null, thread: String = "t-new", ref: String? = null,
++                   stage: ApplicationStage? = ApplicationStage.INTERVIEW) = ApplicationEvidence(thread, from, company, role, ref, stage)
++
++    // ---------- stages ----------
++    @Test fun `evidence only moves forward`() {
++        assertEquals(ApplicationStage.INTERVIEW, StageMachine.fromEvidence(ApplicationStage.INTERVIEW, ApplicationStage.APPLIED))
++        assertEquals(ApplicationStage.OFFER, StageMachine.fromEvidence(ApplicationStage.INTERVIEW, ApplicationStage.OFFER))
++    }
++
++    @Test fun `rejection ends an active application, and nothing reopens a finished one`() {
++        assertEquals(ApplicationStage.REJECTED, StageMachine.fromEvidence(ApplicationStage.INTERVIEW, ApplicationStage.REJECTED))
++        assertEquals(ApplicationStage.REJECTED, StageMachine.fromEvidence(ApplicationStage.REJECTED, ApplicationStage.OFFER))
++    }
++
++    @Test fun `new activity revives an application marked no response`() =
++        assertEquals(ApplicationStage.INTERVIEW, StageMachine.fromEvidence(ApplicationStage.GHOSTED, ApplicationStage.INTERVIEW))
++
++    // ---------- matching ----------
++    @Test fun `same thread always matches`() {
++        val r = ApplicationMatcher.match(ev("x@whatever.com", thread = "t1"), listOf(app("a", "ABC", "Dev", threads = setOf("t1"))))
++        assertEquals(MatchResult.Existing("a", "same email thread"), r)
++    }
++
++    @Test fun `company from sender domain matches the company name`() {
++        assertEquals("abc", ApplicationMatcher.companyKeyFromDomain("careers@careers.abc-tech.com"))
++        assertEquals("abc", ApplicationMatcher.normalizeCompany("ABC Technologies Pvt. Ltd."))
++        val r = ApplicationMatcher.match(ev("hr@abc-tech.com"), listOf(app("a", "ABC Technologies", "Android Developer")))
++        assertTrue(r is MatchResult.Existing && r.applicationId == "a")
++    }
++
++    @Test fun `platform senders rely on the extracted company and role`() {
++        assertEquals(null, ApplicationMatcher.companyKeyFromDomain("no-reply@myworkday.com"))
++        val apps = listOf(app("a", "Infosys", "Java Developer"), app("b", "Wipro", "Java Developer"))
++        val r = ApplicationMatcher.match(ev("noreply@myworkday.com", company = "Wipro Limited", role = "Java Developer"), apps)
++        assertEquals("b", (r as MatchResult.Existing).applicationId)
++    }
++
++    @Test fun `different role at the same company is a new application`() {
++        val r = ApplicationMatcher.match(ev("hr@abc.com", company = "ABC", role = "Data Analyst"), listOf(app("a", "ABC", "Android Developer")))
++        assertEquals(MatchResult.New, r)
++    }
++
++    @Test fun `two roles at one company with no role in the email is ambiguous`() {
++        val apps = listOf(app("a", "ABC", "Android Developer"), app("b", "ABC", "Backend Developer"))
++        assertTrue(ApplicationMatcher.match(ev("hr@abc.com"), apps) is MatchResult.Ambiguous)
++    }
++
++    @Test fun `role abbreviations still match`() {
++        val r = ApplicationMatcher.match(ev("hr@abc.com", role = "Sr. Android Dev"), listOf(app("a", "ABC", "Senior Android Developer")))
++        assertTrue(r is MatchResult.Existing)
++    }
++
++    @Test fun `reference id matches across platforms`() {
++        val r = ApplicationMatcher.match(ev("jobs@greenhouse.io", company = "ABC", ref = "REQ-4521"),
++            listOf(app("a", "ABC", "Dev", ref = "req-4521"), app("b", "ABC", "QA")))
++        assertEquals(MatchResult.Existing("a", "same reference ID"), r)
++    }
++
++    @Test fun `similar but different companies do not match`() {
++        assertEquals(MatchResult.New, ApplicationMatcher.match(ev("hr@tcs.com", company = "TCS"), listOf(app("a", "TCP Systems", "Dev"))))
++    }
++
++    @Test fun `nothing to go on is untrackable`() =
++        assertEquals(MatchResult.Untrackable, ApplicationMatcher.match(ev("jobs@naukri.com"), emptyList()))
++
++    // ---------- reminders ----------
++    private fun input(stage: ApplicationStage, idleDays: Int, next: Long? = null, followUps: Int = 0, lastFollowUpDays: Int? = null) =
++        PlannerInput("a", stage, now - idleDays * day, next, lastFollowUpDays?.let { now - it * day }, followUps)
++
++    @Test fun `follow up after 14 quiet days, not before`() {
++        assertEquals(ReminderType.FOLLOW_UP_APPLICATION, FollowUpPlanner.plan(listOf(input(ApplicationStage.APPLIED, 14)), now).single().type)
++        assertTrue(FollowUpPlanner.plan(listOf(input(ApplicationStage.APPLIED, 13)), now).isEmpty())
++    }
++
++    @Test fun `follow ups are capped and spaced`() {
++        assertTrue(FollowUpPlanner.plan(listOf(input(ApplicationStage.APPLIED, 20, followUps = 2)), now).isEmpty())
++        assertTrue(FollowUpPlanner.plan(listOf(input(ApplicationStage.APPLIED, 20, followUps = 1, lastFollowUpDays = 3)), now).isEmpty())
++    }
++
++    @Test fun `interview follow up after 5 days`() = assertEquals(ReminderType.FOLLOW_UP_INTERVIEW,
++        FollowUpPlanner.plan(listOf(input(ApplicationStage.INTERVIEW, 5)), now).single().type)
++
++    @Test fun `deadline within a day wins over follow up`() = assertEquals(ReminderType.DEADLINE_SOON,
++        FollowUpPlanner.plan(listOf(input(ApplicationStage.ASSESSMENT, 20, next = now + 6 * 3_600_000L)), now).single().type)
++
++    @Test fun `thirty silent days suggests no response, finished ones are left alone`() {
++        assertEquals(ReminderType.MARK_GHOSTED, FollowUpPlanner.plan(listOf(input(ApplicationStage.APPLIED, 31)), now).single().type)
++        assertTrue(FollowUpPlanner.plan(listOf(input(ApplicationStage.REJECTED, 90), input(ApplicationStage.SAVED, 90)), now).isEmpty())
++    }
++
++    // ---------- insights ----------
++    @Test fun `funnel counts reached stages and response rate`() {
++        val f = ApplicationInsights.funnel(listOf(
++            InsightInput(ApplicationStage.OFFER, ApplicationStage.OFFER, now - 20 * day, now - 18 * day),
++            InsightInput(ApplicationStage.INTERVIEW, ApplicationStage.REJECTED, now - 20 * day, now - 16 * day),
++            InsightInput(ApplicationStage.APPLIED, ApplicationStage.GHOSTED, now - 40 * day, null),
++            InsightInput(ApplicationStage.APPLIED, ApplicationStage.APPLIED, now - 2 * day, null),
++            InsightInput(ApplicationStage.SAVED, ApplicationStage.SAVED, null, null),
++        ))
++        assertEquals(4, f.total); assertEquals(4, f.applied); assertEquals(2, f.interview); assertEquals(1, f.offer)
++        assertEquals(1, f.rejected); assertEquals(1, f.noResponse); assertEquals(50, f.responseRatePercent)
++        assertEquals(3.0, f.averageDaysToResponse!!, 0.001)
++    }
++}
++
++class SharedJobTest {
++    @Test fun `linkedin share text`() {
++        val j = com.iamode.app.domain.jobs.SharedJobParser.parse(
++            "Check out this job at ABC Technologies: Android Developer\nhttps://www.linkedin.com/jobs/view/123456")
++        assertEquals("ABC Technologies", j.company); assertEquals("Android Developer", j.role); assertEquals("linkedin", j.source)
++    }
++
++    @Test fun `role at company with naukri link`() {
++        val j = com.iamode.app.domain.jobs.SharedJobParser.parse("Java Developer at Infosys https://www.naukri.com/job-listings-123")
++        assertEquals("Infosys", j.company); assertEquals("Java Developer", j.role); assertEquals("naukri", j.source)
++    }
++
++    @Test fun `only a link keeps the url and leaves the rest for the user`() {
++        val j = com.iamode.app.domain.jobs.SharedJobParser.parse("https://careers.abc.com/jobs/42")
++        assertEquals("https://careers.abc.com/jobs/42", j.url); assertEquals(null, j.company)
++    }
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/app/src/test/java/com/iamode/app/domain/MailWorkflowTest.kt ia-mode/frontend/app/src/test/java/com/iamode/app/domain/MailWorkflowTest.kt
+--- a/frontend/app/src/test/java/com/iamode/app/domain/MailWorkflowTest.kt	2026-09-26 09:01:15.265540511 +0000
++++ b/frontend/app/src/test/java/com/iamode/app/domain/MailWorkflowTest.kt	2026-09-26 08:52:25.069624363 +0000
+@@ -271,3 +271,27 @@
+         assertTrue(!com.iamode.app.domain.mail.SenderHistory.from(mapOf("promotion" to 2)).mostlyBulk) // too little history
+     }
+ }
++
++class IndianStyleTest {
++    @Test fun `learns Telugu greeting and sign-off`() {
++        val sent = listOf(
++            "నమస్కారం సార్,\n\nరేపు మీటింగ్‌కి వస్తాను. రిపోర్ట్ కూడా తీసుకువస్తాను.\n\nధన్యవాదాలు,\nకాశీ",
++            "నమస్కారం,\n\nమీరు అడిగిన డాక్యుమెంట్ పంపిస్తున్నాను. ఏదైనా సందేహం ఉంటే చెప్పండి.\n\nధన్యవాదాలు,\nకాశీ",
++            "నమస్కారం మేడమ్,\n\nఈ వారం ప్రాజెక్ట్ అప్డేట్ ఇదే. పని దాదాపు పూర్తయింది.\n\nధన్యవాదాలు,\nకాశీ",
++        )
++        val s = com.iamode.app.domain.mail.WritingStyleAnalyzer.analyze(sent)!!
++        assertEquals("నమస్కారం", s.greeting)
++        assertEquals("ధన్యవాదాలు,\nకాశీ", s.signOff)
++    }
++
++    @Test fun `learns Hindi greeting and sign-off`() {
++        val sent = listOf(
++            "नमस्ते सर,\n\nमैं कल की मीटिंग में आऊंगा और रिपोर्ट भी लाऊंगा।\n\nधन्यवाद,\nकाशी",
++            "नमस्ते,\n\nआपके द्वारा मांगा गया दस्तावेज़ भेज रहा हूं। कोई सवाल हो तो बताइए।\n\nधन्यवाद,\nकाशी",
++            "नमस्ते मैडम,\n\nइस हफ्ते का प्रोजेक्ट अपडेट यह है। काम लगभग पूरा हो गया है।\n\nधन्यवाद,\nकाशी",
++        )
++        val s = com.iamode.app.domain.mail.WritingStyleAnalyzer.analyze(sent)!!
++        assertEquals("नमस्ते", s.greeting)
++        assertEquals("धन्यवाद,\nकाशी", s.signOff)
++    }
++}
+diff -ruN -x build -x .gradle -x __pycache__ -x .pytest_cache -x .venv -x '*.pyc' -x v1.7.patch a/frontend/gradle/libs.versions.toml ia-mode/frontend/gradle/libs.versions.toml
+--- a/frontend/gradle/libs.versions.toml	2026-09-26 09:01:15.265674569 +0000
++++ b/frontend/gradle/libs.versions.toml	2026-09-26 08:53:10.085060571 +0000
+@@ -15,6 +15,7 @@
+ retrofit = "2.11.0"
+ pdfbox = "2.0.27.0"
+ mlkitTextUnbundled = "19.0.1"
++mlkitDevanagariUnbundled = "16.0.1"
+ okhttp = "4.12.0"
+ serialization = "1.7.3"
+ coroutines = "1.9.0"
+@@ -30,6 +31,7 @@
+ crashlyticsPlugin = "3.0.2"
+ 
+ [libraries]
++mlkit-text-recognition-devanagari = { group = "com.google.android.gms", name = "play-services-mlkit-text-recognition-devanagari", version.ref = "mlkitDevanagariUnbundled" }
+ mlkit-text-recognition = { group = "com.google.android.gms", name = "play-services-mlkit-text-recognition", version.ref = "mlkitTextUnbundled" }
+ pdfbox-android = { group = "com.tom-roush", name = "pdfbox-android", version.ref = "pdfbox" }
+ androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

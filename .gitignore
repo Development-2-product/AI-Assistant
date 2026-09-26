@@ -1,0 +1,27 @@
+# Backend
+backend/.env
+backend/.env.production
+backend/.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Android
+frontend/.gradle/
+frontend/.idea/
+frontend/local.properties
+frontend/build/
+frontend/app/build/
+frontend/app/google-services.json
+frontend/app/src/**/google-services.json
+frontend/captures/
+*.iml
+*.keystore
+*.jks
+
+# Kotlin compiler cache
+frontend/.kotlin/
+
+# JVM crash dumps (never commit)
+hs_err_pid*.log
+replay_pid*.log

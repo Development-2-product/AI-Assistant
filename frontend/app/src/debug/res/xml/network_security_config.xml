@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: allow plain http so a server on your PC's Wi-Fi IP works whatever the IP is.
+     Release builds use src/main's config, which allows HTTPS only (plus the emulator host). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
