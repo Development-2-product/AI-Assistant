@@ -19,6 +19,7 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements*.txt
       - run: pip install -r requirements-dev.txt
+      - run: python -m pip check
       - run: pytest -q
 
   android:
@@ -37,6 +38,8 @@ jobs:
         run: ./frontend/gradlew testDebugUnitTest --no-configuration-cache
       - name: Build debug APK
         run: ./frontend/gradlew assembleDebug --no-configuration-cache
+      - name: Android static analysis
+        run: ./frontend/gradlew lintDebug --no-configuration-cache
       - uses: actions/upload-artifact@v4
         with:
           name: ia-mode-debug-apk
@@ -61,3 +64,12 @@ jobs:
           api-level: 29
           arch: x86_64
           script: cd frontend && ./gradlew connectedDebugAndroidTest --no-configuration-cache
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4

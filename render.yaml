@@ -13,6 +13,10 @@ services:
         value: production
       - key: AUTH_MODE
         value: firebase
+      # Keep public API docs disabled. Change temporarily in the Render
+      # dashboard for a diagnostic session, then return it to false.
+      - key: ENABLE_API_DOCS
+        value: "false"
       - key: FIREBASE_PROJECT_ID
         value: ia-mode-509514
       - key: GEMINI_MODEL_FAST
@@ -22,4 +26,6 @@ services:
       - key: GEMINI_MODEL_FALLBACK
         value: gemini-3.5-flash-lite
       - key: GEMINI_API_KEY
+        sync: false
+      - key: REDIS_URL
         sync: false

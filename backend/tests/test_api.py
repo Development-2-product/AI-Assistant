@@ -120,6 +120,30 @@ def test_health_is_public(client):
     assert "gemini_api_key" not in r.text and "firebase_project_id" not in r.text
 
 
+def test_api_sets_conservative_response_headers(client):
+    r = client.get("/v1/health")
+    assert r.headers["cache-control"] == "no-store"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert "default-src 'none'" in r.headers["content-security-policy"]
+
+
+def test_development_swagger_gets_a_narrow_csp(client):
+    r = client.get("/docs")
+    assert r.status_code == 200
+    csp = r.headers["content-security-policy"]
+    assert "https://cdn.jsdelivr.net" in csp
+    assert "connect-src 'self'" in csp
+
+
+def test_openapi_schema_is_available_with_development_docs(client):
+    assert client.get("/openapi.json").status_code == 200
+
+
+def test_oversized_request_is_rejected_before_validation(client):
+    r = client.post("/v1/messages/process", content=b"x" * 131_073, headers={**AUTH, "Content-Type": "application/json"})
+    assert r.status_code == 413
+
+
 def test_unexpected_error_is_safe_and_correlated(client, fake_llm):
     async def broken(*, model, prompt, schema):
         raise RuntimeError("private mail body must not appear in the response")

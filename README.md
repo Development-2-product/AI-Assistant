@@ -1,10 +1,10 @@
 # IA Mode
 
-> **Replies not working?** Open **Settings › Connection check** in the app, and see **TROUBLESHOOTING.md**.
+> **Replies not working?** Open **Settings › Connection check** in the app and inspect the returned request ID in the server's metadata-only logs.
 >
 > **v1.2** adds WhatsApp Business, Telegram and Instagram DMs, group chats (reply when mentioned),
 > automatic on/off (driving, meetings, schedules), a "While you were busy" summary, a home-screen widget
-> and crash reporting. See **CHANGELOG.md**. **REVIEW.md** lists what's still needed before a public release.
+> and crash reporting. The production launch requirements are in [docs/PRODUCTION_RUNBOOK.md](docs/PRODUCTION_RUNBOOK.md), and the privacy baseline is in [docs/PRIVACY.md](docs/PRIVACY.md).
 
 An Android assistant that replies for you when you're busy: WhatsApp messages, Gmail and missed calls,
 in each person's own language (Telugu, Tenglish, Hindi, Tamil, Kannada, English and mixes).

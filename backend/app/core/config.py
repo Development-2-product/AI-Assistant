@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +18,9 @@ class Settings(BaseSettings):
 
     environment: Literal["development", "staging", "production"] = "development"
     log_level: str = "INFO"
+    # Development always has local Swagger. Production documentation is opt-in
+    # for a short diagnostic window and must be disabled again after use.
+    enable_api_docs: bool = False
     # Human-readable deploy revision only; never put secrets or URLs in this value.
     release_version: str = "unknown"
 
@@ -37,7 +40,12 @@ class Settings(BaseSettings):
     # safe default is to allow no browser origin until one is explicitly set.
     cors_allowed_origins: str = ""
 
-    rate_limit_per_minute: int = 60
+    # AI endpoints are intentionally expensive. Keep a per-account and a second
+    # network-level limit so freshly-created anonymous accounts cannot be used to
+    # turn the API into an unrestricted model proxy.
+    rate_limit_per_minute: int = Field(default=60, ge=1, le=10_000)
+    rate_limit_per_ip_per_minute: int = Field(default=240, ge=1, le=50_000)
+    max_request_body_bytes: int = Field(default=131_072, ge=4_096, le=2_097_152)
     redis_url: str = ""
 
     # WhatsApp Cloud is deliberately off until a verified Meta business integration is configured.
@@ -66,6 +74,8 @@ class Settings(BaseSettings):
                 raise ValueError("FIREBASE_PROJECT_ID is required when ENVIRONMENT=production")
             if not self.gemini_api_key:
                 raise ValueError("GEMINI_API_KEY is required when ENVIRONMENT=production")
+            if not self.redis_url:
+                raise ValueError("REDIS_URL is required when ENVIRONMENT=production so rate limits are shared")
         if self.auth_mode == "dev" and not self.dev_api_token:
             raise ValueError("DEV_API_TOKEN is required when AUTH_MODE=dev")
         if "*" in self.cors_origins:

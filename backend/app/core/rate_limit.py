@@ -2,7 +2,7 @@
 import time
 from collections import defaultdict, deque
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 
 from app.core.auth import AuthUser, get_current_user
 from app.core.config import get_settings
@@ -55,13 +55,27 @@ def _get_limiter():
     return _limiter
 
 
-async def rate_limited_user(user: AuthUser = Depends(get_current_user)) -> AuthUser:
+async def rate_limited_user(
+    request: Request,
+    user: AuthUser = Depends(get_current_user),
+) -> AuthUser:
+    """Apply separate account and network limits before an AI call.
+
+    Account-only limits are easy to evade when anonymous Firebase sign-in is in
+    use. The client address is intentionally only a second coarse limit: mobile
+    networks often share addresses, so it is set much higher than the user cap.
+    """
     try:
-        allowed = await _get_limiter().allow(user.uid, get_settings().rate_limit_per_minute)
+        settings = get_settings()
+        limiter = _get_limiter()
+        # Do not place a raw Firebase uid in Redis keys.
+        user_allowed = await limiter.allow(f"user:{user.uid_hash}", settings.rate_limit_per_minute)
+        client_ip = request.client.host if request.client else "unknown"
+        ip_allowed = await limiter.allow(f"ip:{client_ip}", settings.rate_limit_per_ip_per_minute)
     except RateLimitUnavailable:
         # Fail closed instead of letting an unreachable Redis instance become an opaque 500 or
         # silently disabling a production-wide rate limit.
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Rate limiting is temporarily unavailable")
-    if not allowed:
+    if not user_allowed or not ip_allowed:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests, slow down")
     return user

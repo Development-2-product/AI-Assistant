@@ -19,6 +19,11 @@ def test_production_requires_gemini_key():
         Settings(environment="production", auth_mode="firebase", firebase_project_id="ia-mode", gemini_api_key="")
 
 
+def test_production_requires_shared_rate_limiter():
+    with pytest.raises(ValidationError, match="REDIS_URL"):
+        Settings(environment="production", auth_mode="firebase", firebase_project_id="ia-mode", gemini_api_key="x")
+
+
 def test_dev_auth_requires_explicit_token():
     with pytest.raises(ValidationError, match="DEV_API_TOKEN"):
         Settings(environment="development", auth_mode="dev", dev_api_token="")
@@ -27,3 +32,11 @@ def test_dev_auth_requires_explicit_token():
 def test_cors_wildcard_is_rejected():
     with pytest.raises(ValidationError, match="CORS_ALLOWED_ORIGINS"):
         Settings(cors_allowed_origins="*")
+
+
+def test_api_docs_are_explicitly_opt_in_for_production():
+    settings = Settings(
+        environment="production", auth_mode="firebase", firebase_project_id="ia-mode",
+        gemini_api_key="x", redis_url="redis://test", enable_api_docs=True,
+    )
+    assert settings.enable_api_docs is True

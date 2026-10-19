@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.core.http import MaxRequestBodySizeMiddleware
 from app.core.logging import log_event, setup_logging
 from app.services.gemini_client import LLMError
 from app.services.prompts import validate_prompt_assets
@@ -16,14 +17,36 @@ settings = get_settings()
 validate_prompt_assets()
 setup_logging(settings.log_level)
 logger = logging.getLogger("ia_mode")
+docs_enabled = settings.environment != "production" or settings.enable_api_docs
 
 app = FastAPI(
     title="IA Mode API",
     version="1.0.0",
-    docs_url=None if settings.environment == "production" else "/docs",
+    docs_url="/docs" if docs_enabled else None,
     redoc_url=None,
+    openapi_url="/openapi.json" if docs_enabled else None,
 )
+app.add_middleware(MaxRequestBodySizeMiddleware, max_bytes=settings.max_request_body_bytes)
 app.state.started_at = time.monotonic()
+
+
+def content_security_policy(path: str) -> str:
+    """Keep the API locked down while allowing FastAPI's development-only Swagger UI.
+
+    FastAPI serves /docs only outside production and its stock page loads its
+    versioned UI bundle from jsDelivr plus one inline initialisation block. This
+    exception is deliberately path- and environment-scoped; API responses and
+    every production response retain the deny-all policy.
+    """
+    if docs_enabled and path in {"/docs", "/redoc"}:
+        return (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data: https://fastapi.tiangolo.com; "
+            "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+        )
+    return "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
 
 if settings.cors_origins:
     app.add_middleware(
@@ -37,7 +60,9 @@ if settings.cors_origins:
 
 @app.middleware("http")
 async def request_context(request: Request, call_next):
-    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+    supplied_request_id = request.headers.get("x-request-id", "")
+    # Do not reflect an arbitrary unbounded header into logs or responses.
+    request_id = supplied_request_id if supplied_request_id.isascii() and supplied_request_id.replace("-", "").isalnum() and len(supplied_request_id) <= 64 else uuid.uuid4().hex[:12]
     request.state.request_id = request_id
     start = time.perf_counter()
     try:
@@ -54,6 +79,11 @@ async def request_context(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = content_security_policy(request.url.path)
+    response.headers["Permissions-Policy"] = "accelerometer=(), camera=(), geolocation=(), microphone=()"
+    response.headers["Cache-Control"] = "no-store"
+    if settings.environment == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     # Metadata only. Request bodies contain private messages and are never logged.
     log_event(logger, "request", id=request_id, path=request.url.path, status=response.status_code,
               ms=int((time.perf_counter() - start) * 1000))

@@ -7,7 +7,7 @@ from app.core.config import Settings
 
 
 def _settings(**kw):
-    base = dict(auth_mode="firebase", firebase_project_id="ia-mode", environment="production", gemini_api_key="x")
+    base = dict(auth_mode="firebase", firebase_project_id="ia-mode", environment="production", gemini_api_key="x", redis_url="redis://test")
     base.update(kw)
     return Settings(**base)
 
