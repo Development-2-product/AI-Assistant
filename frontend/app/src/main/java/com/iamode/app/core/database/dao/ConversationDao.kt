@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ConversationDao {
+    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<ConversationEntity>>
     @Query("SELECT * FROM conversations WHERE sessionId = :sessionId ORDER BY updatedAt DESC")
     fun observeForSession(sessionId: String): Flow<List<ConversationEntity>>
 
@@ -32,6 +34,13 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations WHERE status = 'QUEUED'")
     suspend fun queued(): List<ConversationEntity>
 
+    @Query("SELECT * FROM conversations WHERE status = 'QUEUED' ORDER BY updatedAt DESC")
+    fun observeQueued(): Flow<List<ConversationEntity>>
+
+    /** Cross-session review queue. These states always require the person's attention. */
+    @Query("SELECT * FROM conversations WHERE status IN ('PENDING_APPROVAL', 'CRISIS', 'CALLBACK') ORDER BY updatedAt DESC")
+    fun observeActionable(): Flow<List<ConversationEntity>>
+
     @Upsert
     suspend fun upsert(entity: ConversationEntity)
 
@@ -41,10 +50,18 @@ interface ConversationDao {
 
     @Query("DELETE FROM conversations")
     suspend fun deleteAll()
+
+    /** Removes whole completed sessions after the local retention window; active work is never touched. */
+    @Query("DELETE FROM conversations WHERE sessionId IN (SELECT id FROM sessions WHERE endedAt IS NOT NULL AND endedAt < :before)")
+    suspend fun deleteForExpiredSessions(before: Long)
+
+    @Query("SELECT COUNT(*) FROM conversations") fun observeCount(): Flow<Int>
 }
 
 @Dao
 interface MessageDao {
+    @Query("SELECT conversationId, SUM(CASE WHEN fromMe = 0 THEN 1 ELSE 0 END) AS received, SUM(CASE WHEN fromMe = 1 THEN 1 ELSE 0 END) AS sent FROM messages GROUP BY conversationId")
+    fun observeCountsByConversation(): Flow<List<ConversationMessageCount>>
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp ASC, id ASC")
     fun observe(conversationId: String): Flow<List<MessageEntity>>
 
@@ -70,4 +87,8 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE timestamp < :before")
     suspend fun deleteOlderThan(before: Long)
+
+    @Query("SELECT COUNT(*) FROM messages") fun observeCount(): Flow<Int>
 }
+
+data class ConversationMessageCount(val conversationId: String, val received: Int, val sent: Int)

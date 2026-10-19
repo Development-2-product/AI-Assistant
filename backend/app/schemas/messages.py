@@ -10,6 +10,7 @@ from app.schemas.common import (
     ReplyStyle,
     Script,
     UserContext,
+    LanguageHint,
 )
 
 
@@ -19,6 +20,9 @@ class ProcessMessageRequest(BaseModel):
     user: UserContext = UserContext()
     subject: str | None = Field(default=None, max_length=300)
     messages: list[ChatMessage] = Field(min_length=1, max_length=40)
+    # Derived on-device from the latest inbound text. It is a reply-format constraint,
+    # never an authorization or safety decision.
+    reply_language: LanguageHint | None = None
     money_mode: Literal["safe_reply", "ask"] = "safe_reply"
 
 
@@ -35,6 +39,12 @@ class Analysis(BaseModel):
     needs_reply: bool
     conversation_state: Literal["ongoing", "wrapping_up", "ended"]
     style: ReplyStyle
+
+
+class DraftedAnalysis(Analysis):
+    """The fast-path model result: classification and its proposed reply together."""
+
+    reply: str = Field(default="", max_length=2500)
 
 
 class ProcessMessageResponse(BaseModel):

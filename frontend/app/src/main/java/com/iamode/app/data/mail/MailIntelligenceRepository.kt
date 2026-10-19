@@ -40,8 +40,13 @@ import com.iamode.app.domain.mail.RankedDocument
 import com.iamode.app.domain.mail.SenderHistory
 import com.iamode.app.domain.repository.SettingsRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -106,24 +111,44 @@ class MailIntelligenceRepository @Inject constructor(
         val gmailMessageIds = fromGmail.map { it.mail.gmailId }.toSet()
         val failedGmailAccounts = mutableSetOf<String>()
         var stoppedForQuota = false
-        for (m in batch) {
-            try {
-                auto += classify(m)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: HttpException) {
-                if (m.mail.gmailId in gmailMessageIds) failedGmailAccounts += m.accountEmail
-                log.record("Mail", false, "Understanding an email failed: HTTP ${e.code()}")
-                if (e.code() == 429) { stoppedForQuota = true; break } // free-tier quota: stop and try again later
-            } catch (e: Exception) {
-                if (m.mail.gmailId in gmailMessageIds) failedGmailAccounts += m.accountEmail
-                log.record("Mail", false, "Understanding an email failed: ${e.javaClass.simpleName}")
+        // Two concurrent model calls reduce a long mailbox queue while staying deliberately
+        // conservative with provider quota. Each successful result is persisted by classify().
+        val outcomes = coroutineScope {
+            val gate = Semaphore(2)
+            batch.map { m -> async {
+                gate.withPermit {
+                    try {
+                        ClassificationOutcome(m, classify(m), null)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        ClassificationOutcome(m, emptyList(), e)
+                    }
+                }
+            } }.awaitAll()
+        }
+        outcomes.forEach { outcome ->
+            auto += outcome.actions
+            val error = outcome.error ?: return@forEach
+            if (outcome.mail.mail.gmailId in gmailMessageIds) failedGmailAccounts += outcome.mail.accountEmail
+            when (error) {
+                is HttpException -> {
+                    log.record("Mail", false, "Understanding an email failed: HTTP ${error.code()}")
+                    if (error.code() == 429) stoppedForQuota = true
+                }
+                else -> log.record("Mail", false, "Understanding an email failed: ${error.javaClass.simpleName}")
             }
         }
         if (!stoppedForQuota) gmailFetch.checkpoints.filterNot { it.accountEmail in failedGmailAccounts }.forEach { gmail.commitHistory(it) }
         if (batch.isNotEmpty()) log.record("Mail", true, "Understood ${batch.size} new email(s)")
         return auto
     }
+
+    private data class ClassificationOutcome(
+        val mail: GmailRepository.IntelligenceMail,
+        val actions: List<String>,
+        val error: Exception?,
+    )
 
     private suspend fun classify(m: GmailRepository.IntelligenceMail): List<String> {
         val p = m.mail

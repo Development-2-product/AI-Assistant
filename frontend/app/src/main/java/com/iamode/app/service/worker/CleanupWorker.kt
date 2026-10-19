@@ -8,7 +8,10 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.iamode.app.core.database.dao.AlertDao
+import com.iamode.app.core.database.dao.ConversationDao
 import com.iamode.app.core.database.dao.MessageDao
+import com.iamode.app.core.database.dao.SessionDao
+import com.iamode.app.core.database.dao.ChatCommitmentDao
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
@@ -19,16 +22,22 @@ class CleanupWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
     private val messages: MessageDao,
+    private val conversations: ConversationDao,
+    private val sessions: SessionDao,
     private val alerts: AlertDao,
     private val mail: com.iamode.app.core.database.dao.MailIntelligenceDao,
+    private val commitments: ChatCommitmentDao,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
         val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(RETENTION_DAYS)
         messages.deleteOlderThan(cutoff)
         alerts.deleteOlderThan(cutoff)
+        conversations.deleteForExpiredSessions(cutoff)
+        sessions.deleteEndedOlderThan(cutoff)
         // Email understanding keeps metadata only; drop it after 90 days.
         mail.deleteOlderThan(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(90))
+        commitments.deleteTerminalOlderThan(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(90))
         return Result.success()
     }
 

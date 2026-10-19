@@ -25,6 +25,16 @@ def test_process_returns_analysis_and_reply(client, fake_llm):
     assert "TECHNICAL QUESTIONS" in fake_llm.prompts[-1]
 
 
+def test_latest_message_language_hint_locks_writer_language(client, fake_llm):
+    request = body("Can you call later?")
+    request["reply_language"] = {"lang": "en", "script": "roman"}
+    r = client.post("/v1/messages/process", json=request, headers=AUTH)
+    assert r.status_code == 200
+    assert "Write the reply in English using English letters" in fake_llm.prompts[-1]
+    # The client-provided newest-message target, not old conversation history, is returned to the app.
+    assert r.json()["analysis"]["language"] == "en"
+
+
 def test_ended_conversation_gets_no_reply(client, fake_llm):
     fake_llm.analysis.conversation_state = "ended"
     r = client.post("/v1/messages/process", json=body("sare ra"), headers=AUTH)
@@ -65,19 +75,19 @@ def test_validation_rejects_empty_messages(client):
     assert client.post("/v1/messages/process", json=b, headers=AUTH).status_code == 422
 
 
-def test_writer_falls_back_when_model_is_overloaded(client, fake_llm):
+def test_fast_path_falls_back_when_model_is_overloaded(client, fake_llm):
     from app.services.gemini_client import LLMError
 
     calls = []
-    original = fake_llm.generate_text
+    original = fake_llm.generate_json
 
-    async def flaky(*, model, prompt):
+    async def flaky(*, model, prompt, schema):
         calls.append(model)
         if len(calls) == 1:
             raise LLMError("503 high demand")
-        return await original(model=model, prompt=prompt)
+        return await original(model=model, prompt=prompt, schema=schema)
 
-    fake_llm.generate_text = flaky
+    fake_llm.generate_json = flaky
     r = client.post("/v1/messages/process", json=body(), headers=AUTH)
     assert r.status_code == 200
     assert r.json()["reply"]
@@ -104,7 +114,10 @@ def test_message_text_cannot_break_out_of_conversation_block(client, fake_llm):
 
 def test_health_is_public(client):
     r = client.get("/v1/health")
-    assert r.status_code == 200 and r.json()["status"] == "ok"
+    data = r.json()
+    assert r.status_code == 200 and data["status"] == "ok"
+    assert data["api_version"] == "1" and isinstance(data["uptime_seconds"], int)
+    assert "gemini_api_key" not in r.text and "firebase_project_id" not in r.text
 
 
 def test_unexpected_error_is_safe_and_correlated(client, fake_llm):

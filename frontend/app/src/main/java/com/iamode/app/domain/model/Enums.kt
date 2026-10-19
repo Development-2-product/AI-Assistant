@@ -27,6 +27,13 @@ enum class Relationship(val label: String) {
 
 enum class ReplyMode { AUTO, APPROVE }
 
+/** Per-contact guardrails. They only restrict automatic replies; manual sends still require approval. */
+enum class ContactAutoReplyControl(val label: String) {
+    DEFAULT("Use global settings"),
+    ALWAYS_APPROVE("Always ask me"),
+    NEVER_AUTO_REPLY("Never auto-reply"),
+}
+
 enum class ConversationStatus {
     ANALYZING, PENDING_APPROVAL, QUEUED, SENDING, WAITING, CALLBACK, CRISIS, ENDED, SKIPPED;
 
@@ -88,4 +95,5 @@ enum class MessageKind { TEXT, CALL, CALL_REPLY }
 
 enum class StartSource { MANUAL, AUTO }
 
-enum class AlertKind { NEW_MAIL, APPROVAL, SENT, CRISIS, CALLBACK, ENDED, FOLLOW_UP, ERROR }
+/** Local encrypted audit records. Their UI summaries intentionally avoid message bodies. */
+enum class AlertKind { NEW_MAIL, APPROVAL, SENT, CRISIS, CALLBACK, ENDED, FOLLOW_UP, ERROR, AUTOMATION, POLICY }

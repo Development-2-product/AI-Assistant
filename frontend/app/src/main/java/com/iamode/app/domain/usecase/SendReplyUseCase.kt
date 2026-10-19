@@ -23,6 +23,17 @@ class SendReplyUseCase @Inject constructor(
         val c = conversations.get(conversationId) ?: return
         val text = c.pendingReply?.trim().orEmpty()
         if (text.isEmpty() || !c.status.isOpen) return
+        // A queued worker may outlive a policy edit. This final guard makes contact restrictions
+        // authoritative at dispatch time while leaving explicit user-approved sends intact.
+        if (auto && c.forceApproval) {
+            conversations.upsert(c.copy(
+                status = ConversationStatus.PENDING_APPROVAL, autopilot = false, sendAt = null,
+                reason = c.contactPolicyReason ?: "This contact requires your approval",
+                updatedAt = System.currentTimeMillis(),
+            ))
+            alerts.add(AlertKind.POLICY, "Automatic reply paused", c.contactPolicyReason ?: "This contact requires your approval", c.id)
+            return
+        }
         // This must happen before dispatch. UI approval and the undo scheduler can arrive at the
         // same instant; exactly one caller is allowed to hand the reply to the chat app.
         val claimedAt = System.currentTimeMillis()

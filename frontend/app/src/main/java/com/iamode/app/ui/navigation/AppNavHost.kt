@@ -1,6 +1,8 @@
 package com.iamode.app.ui.navigation
 
 import android.net.Uri
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -36,6 +38,7 @@ import com.iamode.app.ui.feature.contacts.ContactsScreen
 import com.iamode.app.ui.feature.diagnostics.DiagnosticsScreen
 import com.iamode.app.ui.feature.conversation.ConversationScreen
 import com.iamode.app.ui.feature.home.HomeScreen
+import com.iamode.app.ui.feature.history.HistoryScreen
 import com.iamode.app.ui.feature.onboarding.OnboardingScreen
 import com.iamode.app.ui.feature.onboarding.PermissionsScreen
 import com.iamode.app.ui.feature.settings.SettingsScreen
@@ -47,6 +50,9 @@ import com.iamode.app.ui.feature.mail.InterviewCalendarScreen
 import com.iamode.app.ui.feature.mail.MailDetailScreen
 import com.iamode.app.ui.feature.mail.MailHomeScreen
 import com.iamode.app.ui.feature.mail.OpportunitiesScreen
+import com.iamode.app.ui.feature.commitments.CommitmentTrackerScreen
+import com.iamode.app.ui.feature.commitments.CommitmentDetailScreen
+import com.iamode.app.ui.feature.privacy.PrivacyDashboardScreen
 import com.iamode.app.ui.feature.mail.ReplyReviewScreen
 import com.iamode.app.ui.theme.Motion
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -60,10 +66,12 @@ object Routes {
     const val ONBOARDING = "onboarding"
     const val PERMISSIONS = "permissions"
     const val HOME = "home"
+    const val HISTORY = "history"
     const val CONVERSATION = "conversation/{id}?name={name}&rel={rel}"
     const val ALERTS = "alerts"
     const val CONTACTS = "contacts"
     const val SETTINGS = "settings"
+    const val PRIVACY = "privacy"
     const val DIAGNOSTICS = "diagnostics"
     const val SUMMARY = "summary/{sessionId}"
     const val MAIL_ACTIONS = "mail-actions"
@@ -74,12 +82,15 @@ object Routes {
     const val OPPORTUNITIES = "opportunities"
     const val APPLICATIONS = "applications?shared={shared}"
     const val APPLICATION = "application/{id}"
+    const val COMMITMENTS = "commitments"
+    const val COMMITMENT = "commitments/{id}"
     fun applications(shared: String? = null) = if (shared == null) "applications" else "applications?shared=${Uri.encode(shared)}"
     fun application(id: String) = "application/$id"
     fun mailDetail(emailId: String) = "mail/${Uri.encode(emailId)}"
     fun mailReply(actionId: String) = "mail-reply/$actionId"
     fun mailCalendar(actionId: String) = "mail-calendar/$actionId"
     fun summary(sessionId: String) = "summary/$sessionId"
+    fun commitment(id: String) = CommitmentNavigation.route(id)
 
     /** Name and relationship travel with the route so the header can animate in on the very first frame. */
     fun conversation(id: String, name: String = "", relationship: String = "") =
@@ -92,6 +103,9 @@ sealed interface DeepLink {
     data class Summary(val sessionId: String) : DeepLink
     data class Mail(val emailId: String) : DeepLink
     data class Application(val id: String) : DeepLink
+    data class Commitment(val id: String) : DeepLink
+    data object Commitments : DeepLink
+    data object Alerts : DeepLink
     /** Text shared from a job app (LinkedIn, Naukri…) via the Android share sheet. */
     data class SharedJob(val text: String) : DeepLink
 
@@ -101,6 +115,9 @@ sealed interface DeepLink {
             intent.getStringExtra(com.iamode.app.MainActivity.EXTRA_SESSION_ID)?.let { return Summary(it) }
             intent.getStringExtra(com.iamode.app.MainActivity.EXTRA_EMAIL_ID)?.let { return Mail(it) }
             intent.getStringExtra(com.iamode.app.MainActivity.EXTRA_APPLICATION_ID)?.let { return Application(it) }
+            intent.getStringExtra(com.iamode.app.MainActivity.EXTRA_COMMITMENT_ID)?.let { return Commitment(it) }
+            if (intent.getBooleanExtra(com.iamode.app.MainActivity.EXTRA_COMMITMENTS, false)) return Commitments
+            if (intent.getBooleanExtra(com.iamode.app.MainActivity.EXTRA_ALERTS, false)) return Alerts
             if (intent.action == android.content.Intent.ACTION_SEND && intent.type == "text/plain") {
                 intent.getStringExtra(android.content.Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }?.let { return SharedJob(it.take(2000)) }
             }
@@ -108,6 +125,16 @@ sealed interface DeepLink {
             return null
         }
     }
+}
+
+/** A single, testable destination for every commitment entry point. */
+internal object CommitmentNavigation {
+    fun route(id: String): String = "commitments/${URLEncoder.encode(id, StandardCharsets.UTF_8).replace("+", "%20")}" 
+}
+
+internal fun DeepLink.destination(): String? = when (this) {
+    is DeepLink.Commitment -> CommitmentNavigation.route(id)
+    else -> null
 }
 
 data class RootState(val onboardingDone: Boolean, val dynamicColor: Boolean)
@@ -167,6 +194,9 @@ fun AppNavHost(onboardingDone: Boolean, deepLink: DeepLink?, onDeepLinkHandled: 
                 is DeepLink.Summary -> Routes.summary(deepLink.sessionId)
                 is DeepLink.Mail -> Routes.mailDetail(deepLink.emailId)
                 is DeepLink.Application -> Routes.application(deepLink.id)
+                is DeepLink.Commitment -> deepLink.destination()!!
+                DeepLink.Commitments -> Routes.COMMITMENTS
+                DeepLink.Alerts -> Routes.ALERTS
                 is DeepLink.SharedJob -> Routes.applications(shared = deepLink.text)
             }
             nav.navigate(route) { launchSingleTop = true }
@@ -207,7 +237,11 @@ fun AppNavHost(onboardingDone: Boolean, deepLink: DeepLink?, onDeepLinkHandled: 
                         openSummary = { nav.navigate(Routes.summary(it)) },
                         openDiagnostics = { nav.navigate(Routes.DIAGNOSTICS) },
                         openMail = { nav.navigate(Routes.MAIL_INTELLIGENCE) },
+                        openHistory = { nav.navigate(Routes.HISTORY) },
                     )
+                }
+                screen(Routes.HISTORY) {
+                    HistoryScreen(onBack = { nav.popBackStack() }, openSummary = { nav.navigate(Routes.summary(it)) })
                 }
                 screen(
                     Routes.CONVERSATION,
@@ -217,7 +251,7 @@ fun AppNavHost(onboardingDone: Boolean, deepLink: DeepLink?, onDeepLinkHandled: 
                         navArgument("rel") { type = NavType.StringType; defaultValue = "" },
                     ),
                 ) {
-                    ConversationScreen(onBack = { nav.popBackStack() }, openDiagnostics = { nav.navigate(Routes.DIAGNOSTICS) })
+                    ConversationScreen(onBack = { nav.popBackStack() }, openDiagnostics = { nav.navigate(Routes.DIAGNOSTICS) }, openCommitments = { nav.navigate(Routes.COMMITMENTS) }, openCommitment = { nav.navigate(Routes.commitment(it)) })
                 }
                 screen(Routes.DIAGNOSTICS) { DiagnosticsScreen(onBack = { nav.popBackStack() }) }
                 screen(Routes.ALERTS) {
@@ -237,14 +271,27 @@ fun AppNavHost(onboardingDone: Boolean, deepLink: DeepLink?, onDeepLinkHandled: 
                         openDiagnostics = { nav.navigate(Routes.DIAGNOSTICS) },
                         openMailActions = { nav.navigate(Routes.MAIL_ACTIONS) },
                         openMailIntelligence = { nav.navigate(Routes.MAIL_INTELLIGENCE) },
+                        openCommitments = { nav.navigate(Routes.COMMITMENTS) },
+                        openPrivacy = { nav.navigate(Routes.PRIVACY) },
                     )
                 }
+                screen(Routes.PRIVACY) { PrivacyDashboardScreen(onBack = { nav.popBackStack() }) }
                 screen(Routes.MAIL_ACTIONS) {
                     MailActionsScreen(
                         onBack = { nav.popBackStack() },
+                        openConversation = { c -> nav.navigate(Routes.conversation(c.id, c.displayName, c.relationship.name)) },
+                        openCommitments = { nav.navigate(Routes.COMMITMENTS) },
                         openReply = { nav.navigate(Routes.mailReply(it)) },
                         openCalendar = { nav.navigate(Routes.mailCalendar(it)) },
                         openEmail = { nav.navigate(Routes.mailDetail(it)) },
+                    )
+                }
+                screen(Routes.COMMITMENTS) { CommitmentTrackerScreen(onBack = { nav.popBackStack() }, openDetail = { nav.navigate(Routes.commitment(it)) }) }
+                screen(Routes.COMMITMENT, arguments = listOf(navArgument("id") { type = NavType.StringType })) { entry ->
+                    CommitmentDetailScreen(
+                        commitmentId = entry.arguments?.getString("id").orEmpty(),
+                        onBack = { nav.popBackStack() },
+                        openConversation = { nav.navigate(Routes.conversation(it)) },
                     )
                 }
                 screen(Routes.MAIL_INTELLIGENCE) {

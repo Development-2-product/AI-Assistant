@@ -19,6 +19,7 @@ import javax.inject.Singleton
 class SessionRepositoryImpl @Inject constructor(private val dao: SessionDao) : SessionRepository {
     override val activeSession = dao.observeActive().map { it?.toDomain() }
     override val lastEnded = dao.observeLastEnded().map { it?.toDomain() }
+    override fun observeRecentEnded(limit: Int) = dao.observeRecentEnded(limit).map { sessions -> sessions.map { it.toDomain() } }
     override suspend fun current() = dao.active()?.toDomain()
     override suspend fun get(id: String) = dao.get(id)?.toDomain()
 

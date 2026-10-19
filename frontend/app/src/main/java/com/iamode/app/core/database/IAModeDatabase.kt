@@ -37,6 +37,8 @@ import com.iamode.app.core.database.dao.OutlookAccountDao
 import com.iamode.app.core.database.entity.OutlookAccountEntity
 import com.iamode.app.core.database.entity.OpportunityEntity
 import com.iamode.app.core.database.dao.MailIntelligenceDao
+import com.iamode.app.core.database.dao.ChatCommitmentDao
+import com.iamode.app.core.database.entity.ChatCommitmentEntity
 
 @Database(
     entities = [
@@ -46,9 +48,9 @@ import com.iamode.app.core.database.dao.MailIntelligenceDao
         OpportunityEntity::class, CalendarExtractionEntity::class, DocumentCandidateEntity::class,
         DocumentSelectionEntity::class, CelebrationEntity::class, AutomationRuleEntity::class,
         DocumentSourceEntity::class, MutedSenderEntity::class, WritingStyleEntity::class,
-        JobApplicationEntity::class, ApplicationEventEntity::class, OutlookAccountEntity::class,
+        JobApplicationEntity::class, ApplicationEventEntity::class, OutlookAccountEntity::class, ChatCommitmentEntity::class,
     ],
-    version = 9,
+    version = 12,
     exportSchema = true,
 )
 abstract class IAModeDatabase : RoomDatabase() {
@@ -63,6 +65,7 @@ abstract class IAModeDatabase : RoomDatabase() {
     abstract fun mailWorkflowDao(): MailWorkflowDao
     abstract fun jobApplicationDao(): JobApplicationDao
     abstract fun outlookAccountDao(): OutlookAccountDao
+    abstract fun chatCommitmentDao(): ChatCommitmentDao
 
     companion object {
         const val NAME = "iamode.db"
@@ -174,6 +177,32 @@ abstract class IAModeDatabase : RoomDatabase() {
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE gmail_accounts ADD COLUMN historyId TEXT")
+            }
+        }
+        /** v2.1: user-controlled, encrypted local contact memory. */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE contacts ADD COLUMN memoryNote TEXT")
+            }
+        }
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE chat_commitments (id TEXT NOT NULL, contactId TEXT, conversationId TEXT NOT NULL, sourceMessageId TEXT NOT NULL, commitmentText TEXT NOT NULL, normalizedAction TEXT NOT NULL, dueAt INTEGER, dueDatePrecision TEXT NOT NULL, timezone TEXT NOT NULL, status TEXT NOT NULL, confidence TEXT NOT NULL, needsConfirmation INTEGER NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, completedAt INTEGER, dismissedAt INTEGER, snoozedUntil INTEGER, reminderAt INTEGER, reminderSentAt INTEGER, followUpDraft TEXT, sourceExcerpt TEXT, explanation TEXT, PRIMARY KEY(id))")
+                db.execSQL("CREATE UNIQUE INDEX index_chat_commitments_sourceMessageId_normalizedAction ON chat_commitments(sourceMessageId, normalizedAction)")
+                db.execSQL("CREATE INDEX index_chat_commitments_conversationId ON chat_commitments(conversationId)")
+                db.execSQL("CREATE INDEX index_chat_commitments_contactId ON chat_commitments(contactId)")
+                db.execSQL("CREATE INDEX index_chat_commitments_status ON chat_commitments(status)")
+            }
+        }
+        /** v2.3: encrypted, per-contact automatic-reply restrictions and conversation policy snapshots. */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE contacts ADD COLUMN autoReplyControl TEXT NOT NULL DEFAULT 'DEFAULT'")
+                db.execSQL("ALTER TABLE contacts ADD COLUMN allowedAutoReplyChannels TEXT")
+                db.execSQL("ALTER TABLE contacts ADD COLUMN autoReplyStartHour INTEGER")
+                db.execSQL("ALTER TABLE contacts ADD COLUMN autoReplyEndHour INTEGER")
+                db.execSQL("ALTER TABLE conversations ADD COLUMN forceApproval INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE conversations ADD COLUMN contactPolicyReason TEXT")
             }
         }
     }

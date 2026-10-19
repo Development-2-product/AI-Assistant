@@ -15,6 +15,7 @@ $money_instruction
 $group_rules
 
 $language_rules
+$language_instruction
 
 $tone_rules
 

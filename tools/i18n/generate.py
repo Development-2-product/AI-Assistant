@@ -12,7 +12,11 @@ import hashlib, json, os, pathlib, re, sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MAIN = ROOT / 'frontend/app/src/main'
 d = json.load(open(pathlib.Path(__file__).with_name('translations.json'), encoding='utf-8'))
-keys = sorted(d)
+# Retire misleading legacy catalog entries without changing their stable translation-table
+# history. They are no longer emitted into APK resources, so no locale can imply that a
+# build-configured server endpoint is editable at runtime.
+retired_keys = {'Test the server, sign-in, AI and Gmail, and change the server address'}
+keys = sorted(set(d) - retired_keys)
 
 def key_for(fmt):
     words = re.findall(r'[A-Za-z]+', fmt.lower())[:6]

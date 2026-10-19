@@ -39,6 +39,8 @@ data class ConversationEntity(
     val gmailThreadId: String?,
     val gmailMessageId: String?,
     val gmailReferences: String?,
+    val forceApproval: Boolean = false,
+    val contactPolicyReason: String? = null,
     val createdAt: Long,
     val updatedAt: Long,
     val endedAt: Long?,
@@ -68,6 +70,20 @@ data class ContactEntity(
     val relationship: String,
     val languageCode: String?,
     val script: String,
+    val memoryNote: String?,
+    val autoReplyControl: String = "DEFAULT",
+    val allowedAutoReplyChannels: String? = null,
+    val autoReplyStartHour: Int? = null,
+    val autoReplyEndHour: Int? = null,
+)
+
+@Entity(tableName = "chat_commitments", indices = [Index(value = ["sourceMessageId", "normalizedAction"], unique = true), Index("conversationId"), Index("contactId"), Index("status")])
+data class ChatCommitmentEntity(
+    @PrimaryKey val id: String, val contactId: String?, val conversationId: String, val sourceMessageId: String,
+    val commitmentText: String, val normalizedAction: String, val dueAt: Long?, val dueDatePrecision: String,
+    val timezone: String, val status: String, val confidence: String, val needsConfirmation: Boolean,
+    val createdAt: Long, val updatedAt: Long, val completedAt: Long?, val dismissedAt: Long?, val snoozedUntil: Long?,
+    val reminderAt: Long?, val reminderSentAt: Long?, val followUpDraft: String?, val sourceExcerpt: String?, val explanation: String?,
 )
 
 @Entity(tableName = "alerts", indices = [Index("createdAt")])

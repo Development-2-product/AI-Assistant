@@ -11,8 +11,10 @@ import com.iamode.app.domain.model.IncomingMessage
 import com.iamode.app.domain.model.Message
 import com.iamode.app.domain.model.Relationship
 import com.iamode.app.domain.policy.ReplyPolicy
+import com.iamode.app.domain.policy.ContactReplyRules
 import com.iamode.app.domain.policy.ReplyPolicy.Decision
 import com.iamode.app.domain.policy.SensitiveShareRequestDetector
+import com.iamode.app.domain.policy.ReplyLanguagePolicy
 import com.iamode.app.domain.repository.AiRepository
 import com.iamode.app.domain.repository.AiRetryScheduler
 import com.iamode.app.domain.repository.AlertRepository
@@ -23,6 +25,12 @@ import com.iamode.app.domain.repository.SessionRepository
 import com.iamode.app.domain.repository.SettingsRepository
 import com.iamode.app.domain.repository.SituationProvider
 import com.iamode.app.service.worker.MessageBurstCoordinator
+import com.iamode.app.core.database.dao.ChatCommitmentDao
+import com.iamode.app.core.database.entity.ChatCommitmentEntity
+import com.iamode.app.domain.commitments.CommitmentExtractor
+import com.iamode.app.service.worker.CommitmentReminderScheduler
+import android.database.sqlite.SQLiteConstraintException
+import java.time.ZoneId
 import java.util.UUID
 import javax.inject.Inject
 
@@ -40,6 +48,8 @@ class ProcessIncomingMessageUseCase @Inject constructor(
     private val situationProvider: SituationProvider,
     private val endConversation: EndConversationUseCase,
     private val burst: MessageBurstCoordinator,
+    private val commitments: ChatCommitmentDao? = null,
+    private val commitmentReminders: CommitmentReminderScheduler? = null,
 ) {
     suspend operator fun invoke(incoming: IncomingMessage) {
         // Mail is classified, proposed and approved exclusively by MailIntelligenceRepository.
@@ -49,17 +59,24 @@ class ProcessIncomingMessageUseCase @Inject constructor(
         val settings = settingsRepo.current()
         val now = System.currentTimeMillis()
 
+        val who = if (incoming.isGroup) ResolvedContact(incoming.displayName, Relationship.GROUP, null)
+        else resolveContact(incoming.channel, incoming.address, incoming.displayName, settings)
+        val policyReason = ContactReplyRules.restriction(who.contact, incoming.channel, incoming.timestamp)
         var conv = conversations.findOpen(incoming.channel, incoming.address, session.id)
         if (conv == null) {
-            val who = if (incoming.isGroup) ResolvedContact(incoming.displayName, Relationship.GROUP, null)
-            else resolveContact(incoming.channel, incoming.address, incoming.displayName, settings)
             conv = Conversation(
                 id = UUID.randomUUID().toString(), channel = incoming.channel, address = incoming.address,
                 displayName = who.displayName, relationship = who.relationship,
                 status = ConversationStatus.ANALYZING, sessionId = session.id, subject = incoming.subject,
                 gmailAccount = incoming.gmail?.accountEmail, gmailThreadId = incoming.gmail?.threadId,
+                forceApproval = policyReason != null, contactPolicyReason = policyReason,
                 createdAt = now, updatedAt = now,
             )
+            conversations.upsert(conv)
+        } else if (conv.forceApproval != (policyReason != null) || conv.contactPolicyReason != policyReason) {
+            // Persist the policy snapshot on every inbound message so later queued work cannot
+            // use a now-revoked contact permission.
+            conv = conv.copy(forceApproval = policyReason != null, contactPolicyReason = policyReason, updatedAt = now)
             conversations.upsert(conv)
         }
         // Earlier messages (email thread, unread group chat) give the AI context; they are never replied to.
@@ -71,6 +88,34 @@ class ProcessIncomingMessageUseCase @Inject constructor(
         val inserted = conversations.addMessage(Message(conversationId = conv.id, fromMe = false, text = incoming.text,
             timestamp = incoming.timestamp, externalId = incoming.externalId))
         if (!inserted) return // duplicate notification
+
+        // Local-only, incremental commitment extraction. It runs after the message
+        // is durably stored and never affects the normal reply pipeline.
+        incoming.externalId?.let { sourceId ->
+            runCatching {
+                CommitmentExtractor.extract(incoming.text, incoming.timestamp, ZoneId.systemDefault())?.let { x ->
+                    val nowCommitment = System.currentTimeMillis()
+                    val commitmentId = UUID.randomUUID().toString()
+                    commitments?.upsert(ChatCommitmentEntity(
+                        id = commitmentId,
+                        contactId = who.contact?.id,
+                        conversationId = conv.id, sourceMessageId = sourceId,
+                        commitmentText = incoming.text.take(600), normalizedAction = x.action, dueAt = x.dueAt,
+                        dueDatePrecision = x.precision, timezone = ZoneId.systemDefault().id,
+                        status = if (x.needsConfirmation) "REVIEW_NEEDED" else "CONFIRMED",
+                        confidence = if (x.needsConfirmation) "medium" else "high", needsConfirmation = x.needsConfirmation,
+                        createdAt = nowCommitment, updatedAt = nowCommitment, completedAt = null, dismissedAt = null,
+                        snoozedUntil = null, reminderAt = x.dueAt, reminderSentAt = null, followUpDraft = null,
+                        sourceExcerpt = incoming.text.take(180), explanation = x.explanation,
+                    ))
+                    // Clear dates are confirmed by the conservative extractor; ambiguous dates remain review-only.
+                    if (!x.needsConfirmation) commitmentReminders?.schedule(commitmentId, x.dueAt)
+                }
+            }.onFailure { error ->
+                // Duplicate deliveries are expected; other failures must not break messaging.
+                if (error !is SQLiteConstraintException) alerts.add(AlertKind.ERROR, "Commitment tracking unavailable", error.javaClass.simpleName, conv.id)
+            }
+        }
 
         if (conv.status == ConversationStatus.QUEUED) scheduler.cancel(conv.id)
         notifier.cancel(conv.id)
@@ -132,13 +177,19 @@ class ProcessIncomingMessageUseCase @Inject constructor(
         val a = out.analysis
         var decision = ReplyPolicy.decide(
             ReplyPolicy.Input(fresh.relationship, fresh.channel, fresh.displayName, fresh.autopilot, fresh.autoTurns,
-                hasOurReplies = history.any { it.fromMe }),
+                hasOurReplies = history.any { it.fromMe }, forceApproval = fresh.forceApproval,
+                contactPolicyReason = fresh.contactPolicyReason),
             a, settings,
         )
         // A detected request for an email identity or location is always an explicit, per-message
         // decision. This overrides relationship/autopilot settings and prevents accidental sharing.
         SensitiveShareRequestDetector.detect(incomingText)?.let { request ->
             decision = Decision.NeedsApproval("${request.name.lowercase().replace('_', ' ')} sharing always needs your approval", paused = true)
+        }
+        // A language/style mismatch is not safe to auto-send. The draft remains available
+        // for review, but it cannot silently switch a Telugu/Hindi/English conversation.
+        if (!ReplyLanguagePolicy.matches(out.reply, a.language)) {
+            decision = Decision.NeedsApproval("Reply language needs your review", paused = true)
         }
         var c = fresh.copy(
             tone = a.tone, style = a.style, language = a.language, summary = a.summary.ifBlank { fresh.summary },
@@ -157,14 +208,18 @@ class ProcessIncomingMessageUseCase @Inject constructor(
                     val at = System.currentTimeMillis() + settings.undoSeconds * 1000L
                     c = c.copy(status = ConversationStatus.QUEUED, autopilot = true, followUp = decision.followUp, sendAt = at)
                     conversations.upsert(c)
+                    alerts.add(AlertKind.AUTOMATION, "Automatic reply queued", "Queued with an undo delay", c.id)
                     scheduler.schedule(c.id, at)
                 }
             }
             is Decision.NeedsApproval -> {
                 c = c.copy(status = ConversationStatus.PENDING_APPROVAL, autopilot = if (decision.paused) false else c.autopilot)
                 conversations.upsert(c)
+                if (fresh.forceApproval) {
+                    alerts.add(AlertKind.POLICY, "Automatic reply paused", decision.reason, c.id)
+                }
                 val title = if (decision.paused) "IA Mode paused the chat with ${c.displayName}" else "Reply to ${c.displayName} needs your approval"
-                alerts.add(AlertKind.APPROVAL, title, out.reply, c.id)
+                alerts.add(AlertKind.APPROVAL, title, "Draft ready for review", c.id)
                 if (settings.approvalNotifications) notifier.approvalNeeded(c, incomingText)
             }
             is Decision.Crisis -> {

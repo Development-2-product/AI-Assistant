@@ -96,7 +96,7 @@ class HomeViewModel @Inject constructor(
                     alertCount = alertList.size,
                     unreadMailCount = unread,
                 )
-            }
+            }.combine(lastSummary) { state, last -> state.copy(lastSummary = last) }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeUiState())
 

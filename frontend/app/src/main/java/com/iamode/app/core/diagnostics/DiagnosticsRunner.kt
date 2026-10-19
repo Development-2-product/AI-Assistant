@@ -126,7 +126,9 @@ class DiagnosticsRunner @Inject constructor(
         val start = System.currentTimeMillis()
         return try {
             val h = api.health()
-            CheckResult("Server", CheckStatus.OK, "Reached the build-configured server in ${System.currentTimeMillis() - start} ms (prompts ${h.promptVersion ?: "old version"})")
+            val readiness = if (h.aiConfigured == false || h.authConfigured == false) "configuration incomplete" else "ready"
+            CheckResult("Server", if (readiness == "ready") CheckStatus.OK else CheckStatus.WARN,
+                "Reached the build-configured server in ${System.currentTimeMillis() - start} ms (${h.releaseVersion ?: "unknown deploy"}, uptime ${h.uptimeSeconds ?: 0}s, $readiness)")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

@@ -13,6 +13,8 @@ import com.iamode.app.domain.repository.ConversationRepository
 import com.iamode.app.domain.usecase.ConversationActionsUseCase
 import com.iamode.app.core.database.dao.GmailAccountDao
 import com.iamode.app.core.database.dao.OutlookAccountDao
+import com.iamode.app.core.database.dao.ChatCommitmentDao
+import com.iamode.app.core.database.entity.ChatCommitmentEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -29,6 +31,7 @@ data class ConversationUiState(
     val busy: Boolean = false,
     val error: String? = null,
     val emailAccounts: List<String> = emptyList(),
+    val commitments: List<ChatCommitmentEntity> = emptyList(),
 )
 
 @HiltViewModel
@@ -38,6 +41,7 @@ class ConversationViewModel @Inject constructor(
     private val actions: ConversationActionsUseCase,
     gmailAccounts: GmailAccountDao,
     outlookAccounts: OutlookAccountDao,
+    commitments: ChatCommitmentDao,
 ) : ViewModel() {
 
     private val id: String = checkNotNull(savedState["id"])
@@ -56,8 +60,8 @@ class ConversationViewModel @Inject constructor(
     private val emailAccounts = combine(gmailAccounts.observeAll(), outlookAccounts.observeAll()) { gmail, outlook ->
         (gmail.map { it.email } + outlook.map { it.email }).distinct()
     }
-    val state: StateFlow<ConversationUiState> = combine(coreState, emailAccounts) { core, accounts ->
-        core.copy(emailAccounts = accounts)
+    val state: StateFlow<ConversationUiState> = combine(coreState, emailAccounts, commitments.byConversation(id)) { core, accounts, items ->
+        core.copy(emailAccounts = accounts, commitments = items.filter { it.status !in setOf("COMPLETED", "DISMISSED") })
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConversationUiState())
 

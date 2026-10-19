@@ -81,5 +81,8 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_SESSION_ID = "session_id"
         const val EXTRA_EMAIL_ID = "email_id"
         const val EXTRA_APPLICATION_ID = "application_id"
+        const val EXTRA_COMMITMENT_ID = "commitment_id"
+        const val EXTRA_COMMITMENTS = "open_commitments"
+        const val EXTRA_ALERTS = "open_alerts"
     }
 }

@@ -36,6 +36,8 @@ interface ContactDao {
 
     @Query("DELETE FROM contacts")
     suspend fun deleteAll()
+
+    @Query("SELECT COUNT(*) FROM contacts") fun observeCount(): Flow<Int>
 }
 
 @Dao
@@ -51,6 +53,8 @@ interface AlertDao {
 
     @Query("DELETE FROM alerts WHERE createdAt < :before")
     suspend fun deleteOlderThan(before: Long)
+
+    @Query("SELECT COUNT(*) FROM alerts") fun observeCount(): Flow<Int>
 }
 
 @Dao
@@ -70,11 +74,17 @@ interface SessionDao {
     @Query("SELECT * FROM sessions WHERE endedAt IS NOT NULL ORDER BY endedAt DESC LIMIT 1")
     fun observeLastEnded(): Flow<SessionEntity?>
 
+    @Query("SELECT * FROM sessions WHERE endedAt IS NOT NULL ORDER BY endedAt DESC LIMIT :limit")
+    fun observeRecentEnded(limit: Int): Flow<List<SessionEntity>>
+
     @Query("UPDATE sessions SET autoKey = :autoKey, autoReason = :autoReason WHERE endedAt IS NULL")
     suspend fun updateAutoTrigger(autoKey: String, autoReason: String)
 
     @Query("UPDATE sessions SET endedAt = :endedAt WHERE endedAt IS NULL")
     suspend fun endAll(endedAt: Long)
+
+    @Query("DELETE FROM sessions WHERE endedAt IS NOT NULL AND endedAt < :before")
+    suspend fun deleteEndedOlderThan(before: Long)
 
     @Query("DELETE FROM sessions")
     suspend fun deleteAll()
@@ -117,6 +127,7 @@ interface MailIntelligenceDao {
     @Query("UPDATE mail_intelligence SET archived = 1, updatedAt = :now WHERE fromAddress = :address")
     suspend fun archiveFrom(address: String, now: Long)
     @Query("DELETE FROM mail_intelligence WHERE COALESCE(receivedAt, createdAt) < :before") suspend fun deleteOlderThan(before: Long)
+    @Query("DELETE FROM mail_intelligence") suspend fun deleteAll()
 }
 
 @Dao
@@ -138,6 +149,9 @@ interface MailActionDao {
     /** Atomic compare-and-set: returns 1 only for the caller that moved the action. */
     @Query("UPDATE mail_actions SET status = :to, updatedAt = :now WHERE id = :id AND status = :from")
     suspend fun transition(id: String, from: String, to: String, now: Long): Int
+    @Query("DELETE FROM mail_approvals") suspend fun deleteAllApprovals()
+    @Query("DELETE FROM mail_audit") suspend fun deleteAllAudit()
+    @Query("DELETE FROM mail_actions") suspend fun deleteAll()
 }
 
 data class CategoryCount(val category: String, val n: Int)

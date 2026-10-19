@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iamode.app.core.database.entity.GmailAccountEntity
 import com.iamode.app.core.datastore.SeenMessageStore
+import com.iamode.app.core.database.dao.ChatCommitmentDao
 import com.iamode.app.data.gmail.GmailAuthManager
 import com.iamode.app.data.gmail.GmailRepository
 import com.iamode.app.domain.model.AutoModeSettings
@@ -21,12 +22,14 @@ import com.iamode.app.domain.repository.SettingsRepository
 import com.iamode.app.domain.usecase.ToggleIAModeUseCase
 import com.iamode.app.service.auto.AutoModeEvaluator
 import com.iamode.app.service.worker.ModeLifecycle
+import com.iamode.app.service.worker.CommitmentReminderScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -42,6 +45,8 @@ class SettingsViewModel @Inject constructor(
     private val toggle: ToggleIAModeUseCase,
     private val modeLifecycle: ModeLifecycle,
     private val autoMode: AutoModeEvaluator,
+    private val commitments: ChatCommitmentDao,
+    private val commitmentReminders: CommitmentReminderScheduler,
 ) : ViewModel() {
 
     val state: StateFlow<UserSettings> = settings.settings.stateIn(viewModelScope, SharingStarted.Eagerly, UserSettings())
@@ -117,10 +122,12 @@ class SettingsViewModel @Inject constructor(
 
     fun deleteAllData() = viewModelScope.launch {
         toggle.turnOff()
+        commitments.all().first().forEach { commitmentReminders.cancel(it.id) }
+        commitments.deleteAll()
         conversations.deleteAll()
         alerts.clear()
         seen.clear()
-        _message.value = tr("All conversations and alerts deleted")
+        _message.value = tr("All conversations, commitments and alerts deleted")
     }
 
     fun messageShown() { _message.value = null }

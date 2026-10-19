@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.Flow
 
 interface ConversationRepository {
     fun observeForSession(sessionId: String): Flow<List<Conversation>>
+    /** Pending chat approvals, crisis escalations and callback reminders across sessions. */
+    fun observeActionable(): Flow<List<Conversation>>
     fun observe(id: String): Flow<Conversation?>
     fun observeMessages(conversationId: String): Flow<List<Message>>
     suspend fun get(id: String): Conversation?
@@ -55,6 +57,8 @@ interface SessionRepository {
     val activeSession: Flow<Session?>
     /** The most recent finished session (for the "While you were busy" card). */
     val lastEnded: Flow<Session?>
+    /** Finished sessions retained on-device for the activity history. */
+    fun observeRecentEnded(limit: Int = 30): Flow<List<Session>>
     suspend fun current(): Session?
     suspend fun get(id: String): Session?
     suspend fun start(source: StartSource = StartSource.MANUAL, autoKey: String? = null, autoReason: String? = null): Session

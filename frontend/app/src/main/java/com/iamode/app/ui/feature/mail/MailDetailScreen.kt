@@ -52,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.iamode.app.data.mail.CelebrationCoordinator
 import com.iamode.app.data.mail.MailIntelligenceRepository
+import com.iamode.app.data.gmail.GmailNavigator
 import com.iamode.app.domain.mail.MailActionType
 import com.iamode.app.domain.mail.MailCategory
 import com.iamode.app.ui.components.sharedTransition
@@ -186,7 +187,8 @@ fun MailDetailScreen(
                         val app = context.packageManager.getLaunchIntentForPackage("com.microsoft.office.outlook")
                         runCatching { context.startActivity(app ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://outlook.office.com/mail/"))) }
                     } else {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mail.google.com/mail/#all/${it.entity.threadId}")))
+                        runCatching { GmailNavigator.openOriginal(context, it.entity.accountEmail, it.entity.threadId) }
+                            .onFailure { vm.message.value = "Couldn't open the original email" }
                     }
                 }) { Text(if (outlookMail) tr("Open in Outlook") else tr("Open in Gmail")) }
                 OutlinedButton(onClick = { vm.archive(!it.entity.archived) }) { Text(if (it.entity.archived) tr("Move to Inbox") else tr("Archive")) }

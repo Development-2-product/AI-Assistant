@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AssistChip
@@ -95,6 +96,7 @@ fun HomeScreen(
     openSummary: (String) -> Unit,
     openDiagnostics: () -> Unit,
     openMail: () -> Unit = {},
+    openHistory: () -> Unit = {},
     vm: HomeViewModel = hiltViewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -118,6 +120,7 @@ fun HomeScreen(
                     Icon(Icons.Filled.Email, tr("Mail"))
                 }
             }
+            IconButton(onClick = openHistory) { Icon(Icons.Filled.History, "Activity history") }
             IconButton(onClick = openSettings) { Icon(Icons.Filled.Settings, tr("Settings")) }
         })
     }) { padding ->
@@ -176,6 +179,23 @@ fun HomeScreen(
                                 Text(last.headline.replaceFirstChar { it.uppercase() } + tr(". Tap to see everything."),
                                     style = MaterialTheme.typography.bodyMedium)
                             }
+                        }
+                    }
+                }
+                AnimatedVisibility(visible = state.isOn && state.lastSummary != null) {
+                    Card(
+                        onClick = openHistory,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp).fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)),
+                    ) {
+                        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.History, null, tint = MaterialTheme.colorScheme.primary)
+                            Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                                Text("Recent activity", style = MaterialTheme.typography.titleMedium)
+                                Text("Your previous sessions are still available.", style = MaterialTheme.typography.bodyMedium)
+                            }
+                            Text("View", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }

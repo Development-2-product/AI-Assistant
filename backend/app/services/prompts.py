@@ -6,7 +6,7 @@ from string import Template
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 REQUIRED_PROMPTS = (
     "_language_rules", "_security_rules", "_tone_rules", "analyze", "mail_intelligence",
-    "mail_reply", "missed_call", "recap", "reply",
+    "mail_reply", "missed_call", "process", "recap", "reply",
 )
 
 

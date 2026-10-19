@@ -27,6 +27,7 @@ import com.iamode.app.domain.model.ReplyStyle
 import com.iamode.app.domain.model.Script
 import com.iamode.app.domain.model.Situation
 import com.iamode.app.domain.model.UserSettings
+import com.iamode.app.domain.policy.ReplyLanguagePolicy
 import com.iamode.app.domain.repository.AiRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -53,17 +54,22 @@ class AiRepositoryImpl @Inject constructor(
 
     override suspend fun process(conversation: Conversation, messages: List<Message>, settings: UserSettings, situation: Situation) =
         call {
+            val latestInbound = messages.asReversed().firstOrNull { !it.fromMe }?.text.orEmpty()
+            val target = ReplyLanguagePolicy.targetForLatestInbound(latestInbound)
             val res = api.process(
                 ProcessMessageRequest(
                     channel = conversation.channel.name.lowercase(),
                     contact = conversation.toContactDto(),
                     user = user(settings, situation),
                     subject = conversation.subject,
-                    messages = messages.takeLast(MAX_CONTEXT).map { it.toDto() },
+                    messages = compactContext(messages),
+                    replyLanguage = LanguageHintDto(target.code.apiValue, target.script.name.lowercase()),
                     moneyMode = if (settings.moneyMode == MoneyMode.ASK) "ask" else "safe_reply",
                 )
             )
-            AiResult(res.analysis.toDomain(), res.reply)
+            // The target is derived locally from the exact newest inbound text, not inferred
+            // from an older conversation turn. Keep it on the analysis shown in the UI too.
+            AiResult(res.analysis.toDomain().copy(language = target), res.reply)
         }
 
     override suspend fun restyle(conversation: Conversation, messages: List<Message>, style: ReplyStyle, settings: UserSettings, situation: Situation) =
@@ -72,7 +78,7 @@ class AiRepositoryImpl @Inject constructor(
                 RestyleRequest(
                     channel = conversation.channel.name.lowercase(), contact = conversation.toContactDto(),
                     user = user(settings, situation), subject = conversation.subject,
-                    messages = messages.takeLast(MAX_CONTEXT).map { it.toDto() }, style = style.apiValue,
+                    messages = compactContext(messages), style = style.apiValue,
                 )
             ).reply
         }
@@ -97,13 +103,13 @@ class AiRepositoryImpl @Inject constructor(
     }
 
     /**
-     * Retries busy/timeout errors twice (2 s, 5 s), which also covers a free-tier server waking up.
+     * A single short retry handles transient overload without making a live conversation wait seven seconds.
      * Every failure is mapped to an [AiFailure] the UI can explain.
      */
     private suspend fun <T> call(block: suspend () -> T): Result<T> {
         var last: AiFailure = AiFailure.UNKNOWN
         var cause: Throwable? = null
-        for (attempt in 0..2) {
+        for (attempt in 0..1) {
             try {
                 return Result.success(block())
             } catch (e: CancellationException) {
@@ -111,8 +117,8 @@ class AiRepositoryImpl @Inject constructor(
             } catch (e: Exception) {
                 cause = e
                 last = classify(e)
-                if (last != AiFailure.SERVER_BUSY || attempt == 2) break
-                delay(if (attempt == 0) 2_000L else 5_000L)
+                if (last != AiFailure.SERVER_BUSY || attempt == 1) break
+                delay(750L)
             }
         }
         log.record("AI", false, "${last.name}: ${describe(cause)}")
@@ -150,9 +156,17 @@ class AiRepositoryImpl @Inject constructor(
         situation = SituationDto(situation.status.apiValue, situation.reason),
     )
 
-    private fun Message.toDto() = ChatMessageDto(
+    private fun compactContext(messages: List<Message>): List<ChatMessageDto> {
+        val context = messages.takeLast(MAX_CONTEXT)
+        val latestInbound = context.indexOfLast { !it.fromMe }
+        return context.mapIndexed { index, message ->
+            message.toDto(if (index == latestInbound) LATEST_INBOUND_CHARS else HISTORY_MESSAGE_CHARS)
+        }
+    }
+
+    private fun Message.toDto(maxChars: Int = HISTORY_MESSAGE_CHARS) = ChatMessageDto(
         sender = if (fromMe) "me" else "them",
-        text = text.take(6000),
+        text = text.take(maxChars),
         kind = when (kind) {
             MessageKind.TEXT -> "text"
             MessageKind.CALL -> "call"
@@ -172,5 +186,9 @@ class AiRepositoryImpl @Inject constructor(
         style = ReplyStyle.fromApi(style),
     )
 
-    private companion object { const val MAX_CONTEXT = 14 }
+    private companion object {
+        const val MAX_CONTEXT = 8
+        const val LATEST_INBOUND_CHARS = 1_200
+        const val HISTORY_MESSAGE_CHARS = 600
+    }
 }

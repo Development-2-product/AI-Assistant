@@ -44,6 +44,8 @@ class FakeLLM:
         self.prompts.append(prompt)
         if schema in self.json_by_schema:
             return self.json_by_schema[schema].model_copy(deep=True)
+        if "reply" in schema.model_fields:
+            return schema(**self.analysis.model_dump(), reply=self.text)
         return self.analysis.model_copy()
 
     async def generate_text(self, *, model, prompt):

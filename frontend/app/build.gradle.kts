@@ -156,6 +156,8 @@ android {
         buildConfig = true
     }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    // MigrationTestHelper reads exported Room schemas from the instrumentation APK assets.
+    sourceSets { getByName("androidTest").assets.srcDir("$projectDir/schemas") }
 }
 
 room { schemaDirectory("$projectDir/schemas") }
@@ -239,4 +241,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.room.testing)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }

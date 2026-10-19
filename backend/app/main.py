@@ -23,6 +23,7 @@ app = FastAPI(
     docs_url=None if settings.environment == "production" else "/docs",
     redoc_url=None,
 )
+app.state.started_at = time.monotonic()
 
 if settings.cors_origins:
     app.add_middleware(

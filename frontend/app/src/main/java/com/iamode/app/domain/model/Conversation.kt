@@ -30,6 +30,9 @@ data class Conversation(
     val gmailThreadId: String? = null,
     val gmailMessageId: String? = null,
     val gmailReferences: String? = null,
+    /** Snapshot of the contact policy applied to this conversation's latest inbound message. */
+    val forceApproval: Boolean = false,
+    val contactPolicyReason: String? = null,
     val createdAt: Long,
     val updatedAt: Long,
     val endedAt: Long? = null,
@@ -56,6 +59,14 @@ data class Contact(
     /** null = detect automatically from their messages. */
     val language: LanguageCode? = null,
     val script: Script = Script.ROMAN,
+    /** User-written local preference. Never sent automatically or shown in diagnostics. */
+    val memoryNote: String? = null,
+    val autoReplyControl: ContactAutoReplyControl = ContactAutoReplyControl.DEFAULT,
+    /** Empty means no channel is eligible for automatic reply. */
+    val allowedAutoReplyChannels: Set<Channel> = Channel.entries.toSet(),
+    /** Local device hours; null values mean no contact quiet-hours rule. */
+    val autoReplyStartHour: Int? = null,
+    val autoReplyEndHour: Int? = null,
 )
 
 data class Alert(

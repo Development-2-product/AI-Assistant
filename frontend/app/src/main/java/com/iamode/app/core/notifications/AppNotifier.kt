@@ -156,6 +156,69 @@ class AppNotifier @Inject constructor(@ApplicationContext private val context: C
         )
     }
 
+    /** A privacy-preserving local reminder. It deliberately contains no chat or contact content. */
+    fun commitmentReminder(commitmentId: String) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(MainActivity.EXTRA_COMMITMENT_ID, commitmentId)
+        }
+        val id = ("commitment$commitmentId").hashCode()
+        post(
+            id,
+            NotificationCompat.Builder(context, NotificationChannels.ACTIVITY)
+                .setSmallIcon(R.drawable.ic_stat_iamode)
+                .setContentTitle(tr("Commitment reminder"))
+                .setContentText(tr("Your commitment is due soon."))
+                .setContentIntent(PendingIntent.getActivity(context, id, intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+                .setAutoCancel(true),
+        )
+    }
+
+    /** Daily aggregate intentionally contains neither names nor private commitment text. */
+    fun commitmentDigest(review: Int, dueToday: Int, overdue: Int) {
+        if (review + dueToday + overdue == 0) return
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(MainActivity.EXTRA_COMMITMENTS, true)
+        }
+        val id = "commitment-digest".hashCode()
+        val body = buildString {
+            if (review > 0) append("$review need review")
+            if (dueToday > 0) append(if (isNotEmpty()) " · " else "").append("$dueToday due today")
+            if (overdue > 0) append(if (isNotEmpty()) " · " else "").append("$overdue overdue")
+        }
+        post(id, NotificationCompat.Builder(context, NotificationChannels.ACTIVITY)
+            .setSmallIcon(R.drawable.ic_stat_iamode)
+            .setContentTitle(tr("Commitments"))
+            .setContentText(body)
+            .setContentIntent(PendingIntent.getActivity(context, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+            .setAutoCancel(true))
+    }
+
+    /** A once-daily, count-only briefing. It deliberately contains no names, drafts or message text. */
+    fun dailyBriefing(chatReviews: Int, mailReviews: Int, commitmentReview: Int, dueToday: Int, overdue: Int) {
+        if (chatReviews + mailReviews + commitmentReview + dueToday + overdue == 0) return
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(MainActivity.EXTRA_ALERTS, true)
+        }
+        val body = buildList {
+            if (chatReviews > 0) add("$chatReviews chat reviews")
+            if (mailReviews > 0) add("$mailReviews email actions")
+            if (commitmentReview > 0) add("$commitmentReview commitments to review")
+            if (dueToday > 0) add("$dueToday due today")
+            if (overdue > 0) add("$overdue overdue")
+        }.joinToString(" · ")
+        val id = "daily-briefing".hashCode()
+        post(id, NotificationCompat.Builder(context, NotificationChannels.ACTIVITY)
+            .setSmallIcon(R.drawable.ic_stat_iamode)
+            .setContentTitle(tr("Your IA Mode briefing"))
+            .setContentText(body)
+            .setContentIntent(PendingIntent.getActivity(context, id, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+            .setAutoCancel(true))
+    }
+
     /** Big news arrived while the app was closed. Opening it plays the celebration once. */
     fun celebration(emailId: String, headline: String, subtitle: String?) {
         val intent = Intent(context, MainActivity::class.java).apply {

@@ -91,7 +91,7 @@ import com.iamode.app.ui.theme.Motion
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConversationScreen(onBack: () -> Unit, openDiagnostics: () -> Unit, vm: ConversationViewModel = hiltViewModel()) {
+fun ConversationScreen(onBack: () -> Unit, openDiagnostics: () -> Unit, openCommitments: () -> Unit = {}, openCommitment: (String) -> Unit = {}, vm: ConversationViewModel = hiltViewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     val c = state.conversation
     val context = LocalContext.current
@@ -138,14 +138,14 @@ fun ConversationScreen(onBack: () -> Unit, openDiagnostics: () -> Unit, vm: Conv
     ) { padding ->
         if (c == null) return@Scaffold
         LazyColumn(Modifier.fillMaxSize().padding(padding).readableWidth(), state = listState, contentPadding = PaddingValues(12.dp)) {
-            item(key = "info") { InfoCard(c, openDiagnostics) }
+            item(key = "info") { InfoCard(c, openDiagnostics, state.commitments, openCommitments, openCommitment) }
             items(state.messages, key = { it.id }) { ChatBubble(it, c.displayName, Modifier.animateItem()) }
         }
     }
 }
 
 @Composable
-private fun InfoCard(c: Conversation, openDiagnostics: () -> Unit) {
+private fun InfoCard(c: Conversation, openDiagnostics: () -> Unit, commitments: List<com.iamode.app.core.database.entity.ChatCommitmentEntity>, openCommitments: () -> Unit, openCommitment: (String) -> Unit) {
     val (label, color) = statusLabel(c)
     Card(Modifier.fillMaxWidth().padding(bottom = 12.dp).animateContentSize(tween(Motion.MEDIUM, easing = Motion.Emphasized)), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -155,15 +155,52 @@ private fun InfoCard(c: Conversation, openDiagnostics: () -> Unit) {
                 c.language?.let { Pill(tr(it.label), IAColors.Blue) }
                 c.tone?.let { Pill(it, IAColors.Grey) }
             }
-            c.reason?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            DecisionExplanation(c)
             if (!c.aiGenerated && c.status == ConversationStatus.PENDING_APPROVAL) {
                 TextButton(onClick = openDiagnostics) { Text(tr("Find out why: run the connection check")) }
             }
             c.summary?.let { Text(tr("About: %1\$s", it), style = MaterialTheme.typography.labelSmall, color = IAColors.Grey) }
             c.recap?.let { Text(tr("Recap: %1\$s", it), style = MaterialTheme.typography.bodyMedium) }
+            if (commitments.isNotEmpty()) { Text(tr("Commitments"), style = MaterialTheme.typography.labelLarge); commitments.take(3).forEach { item -> TextButton(onClick = { openCommitment(item.id) }, contentPadding = PaddingValues(0.dp)) { Text("• ${item.commitmentText} · ${item.status}", style = MaterialTheme.typography.bodySmall) } }; TextButton(onClick = openCommitments) { Text(tr("Open commitments")) } }
             if (c.autopilot && c.status.isOpen) {
                 Text(tr("IA Mode is handling this chat until it ends (%1\$s auto replies so far).", (c.autoTurns)),
                     style = MaterialTheme.typography.labelSmall, color = IAColors.Green)
+            }
+        }
+    }
+}
+
+/**
+ * A local, deterministic explanation of the action state. It deliberately uses
+ * only policy outcomes already stored on the conversation, never message text
+ * or an AI rationale. This lets people understand and challenge automation
+ * without turning a private chat into diagnostic data.
+ */
+@Composable
+private fun DecisionExplanation(c: Conversation) {
+    val reasons = buildList {
+        c.reason?.takeIf { it.isNotBlank() }?.let(::add)
+        if (c.mentionsMoney || c.asksCommitment) {
+            add(tr("Money or a commitment was detected, so IA Mode will not agree to terms automatically."))
+        }
+        when (c.status) {
+            ConversationStatus.PENDING_APPROVAL -> if (!c.aiGenerated) {
+                add(tr("The AI response was unavailable. Your message is waiting for your own reply; it will not be sent automatically."))
+            }
+            ConversationStatus.CRISIS -> add(tr("Potential crisis language was detected. IA Mode never auto-replies to a crisis."))
+            ConversationStatus.CALLBACK -> add(tr("A missed call needs a personal follow-up, so no automatic chat reply was sent."))
+            else -> Unit
+        }
+    }.distinct()
+    if (reasons.isEmpty()) return
+    Card(
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(tr("Why IA Mode chose this"), style = MaterialTheme.typography.labelLarge)
+            reasons.forEach { reason ->
+                Text("• $reason", style = MaterialTheme.typography.bodySmall, color = IAColors.Grey)
             }
         }
     }

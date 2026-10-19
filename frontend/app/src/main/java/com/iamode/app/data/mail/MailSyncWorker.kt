@@ -9,6 +9,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -55,8 +56,11 @@ class MailSyncWorker @AssistedInject constructor(
 
         fun syncNow(context: Context) {
             WorkManager.getInstance(context).enqueueUniqueWork(
-                NOW, ExistingWorkPolicy.KEEP,
+                // A Gmail notification during an active run must trigger one follow-up scan;
+                // KEEP silently drops it and can leave a new message waiting for the 15-minute job.
+                NOW, ExistingWorkPolicy.APPEND_OR_REPLACE,
                 OneTimeWorkRequestBuilder<MailSyncWorker>().setConstraints(network)
+                    .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                     .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES).build(),
             )
         }

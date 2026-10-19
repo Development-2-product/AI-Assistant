@@ -23,3 +23,12 @@
 -keep class com.microsoft.identity.** { *; }
 -dontwarn com.microsoft.identity.**
 -dontwarn com.microsoft.device.display.**
+
+# MSAL's Nimbus/YubiKey optional algorithms are selected only when their provider artifacts are
+# present. IA Mode does not package those providers, so R8 must not require their absent classes.
+-dontwarn com.google.crypto.tink.subtle.Ed25519Sign
+-dontwarn com.google.crypto.tink.subtle.Ed25519Sign$KeyPair
+-dontwarn com.google.crypto.tink.subtle.Ed25519Verify
+-dontwarn com.google.crypto.tink.subtle.X25519
+-dontwarn com.google.crypto.tink.subtle.XChaCha20Poly1305
+-dontwarn edu.umd.cs.findbugs.annotations.SuppressFBWarnings

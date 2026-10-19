@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.iamode.app.core.notifications.NotificationChannels
 import com.iamode.app.service.worker.CleanupWorker
+import com.iamode.app.service.worker.CommitmentDigestWorker
 import com.iamode.app.core.di.ApplicationScope
 import com.iamode.app.service.worker.ModeLifecycle
 import com.iamode.app.service.worker.SendScheduler
@@ -86,6 +87,7 @@ class IAModeApp : Application(), Configuration.Provider {
         NotificationChannels.create(this)
         sendScheduler.restore()
         CleanupWorker.schedule(this)
+        CommitmentDigestWorker.schedule(this)
         modeLifecycle.rebindListener()
         scope.launch {
             modeLifecycle.restoreIfOn()

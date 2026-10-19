@@ -21,6 +21,8 @@ object ReplyPolicy {
         val autopilot: Boolean,
         val autoTurns: Int,
         val hasOurReplies: Boolean,
+        val forceApproval: Boolean = false,
+        val contactPolicyReason: String? = null,
     )
 
     sealed interface Decision {
@@ -53,6 +55,9 @@ object ReplyPolicy {
         // mail workflow is approval-first; no broad "auto email" switch is a trusted rule.
         if (input.channel == Channel.GMAIL) {
             return Decision.NeedsApproval("Review this email before anything is sent")
+        }
+        if (input.forceApproval) {
+            return Decision.NeedsApproval(input.contactPolicyReason ?: "This contact requires your approval", paused = true)
         }
 
         val risky = analysis.mentionsMoney || analysis.asksCommitment

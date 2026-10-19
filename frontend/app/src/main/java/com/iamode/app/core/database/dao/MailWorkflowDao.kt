@@ -44,6 +44,11 @@ interface MailWorkflowDao {
     @Query("SELECT * FROM mail_document_selections WHERE actionId = :actionId") fun observeSelections(actionId: String): Flow<List<DocumentSelectionEntity>>
     @Query("SELECT * FROM mail_document_selections") fun observeAllSelections(): Flow<List<DocumentSelectionEntity>>
     @Query("SELECT * FROM mail_calendar_extractions") fun observeAllCalendars(): Flow<List<CalendarExtractionEntity>>
+    @Query("DELETE FROM mail_opportunities") suspend fun deleteAllOpportunities()
+    @Query("DELETE FROM mail_calendar_extractions") suspend fun deleteAllCalendars()
+    @Query("DELETE FROM mail_document_candidates") suspend fun deleteAllCandidates()
+    @Query("DELETE FROM mail_document_selections") suspend fun deleteAllSelections()
+    @Query("DELETE FROM mail_celebrations") suspend fun deleteAllCelebrations()
     @Query("SELECT uri, COUNT(*) AS times FROM mail_document_selections WHERE documentType = :type GROUP BY uri")
     suspend fun selectionCounts(type: String): List<UriCount>
 

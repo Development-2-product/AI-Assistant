@@ -53,6 +53,10 @@ import com.iamode.app.data.mail.MailActionExecutor
 import com.iamode.app.data.mail.MailIntelligenceRepository
 import com.iamode.app.data.mail.MailItem
 import com.iamode.app.domain.mail.MailActionType
+import com.iamode.app.domain.model.Conversation
+import com.iamode.app.domain.model.ConversationStatus
+import com.iamode.app.domain.repository.ConversationRepository
+import com.iamode.app.core.database.dao.ChatCommitmentDao
 import com.iamode.app.ui.components.EmptyState
 import com.iamode.app.ui.components.pressScale
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -76,20 +80,32 @@ data class ActionCard(
     val readyToSend: Boolean get() = action.draftBody != null && (action.actionType != MailActionType.SEND_DOCUMENT_REPLY.name || attachment != null)
 }
 
-data class ActionsState(val cards: List<ActionCard> = emptyList(), val audit: List<MailAuditEntity> = emptyList())
+data class ActionsState(
+    val chats: List<Conversation> = emptyList(), val cards: List<ActionCard> = emptyList(), val audit: List<MailAuditEntity> = emptyList(),
+    val commitmentReview: Int = 0, val commitmentUpcoming: Int = 0, val commitmentOverdue: Int = 0,
+)
 
 @HiltViewModel
 class MailActionsViewModel @Inject constructor(
     private val repo: MailIntelligenceRepository,
     private val executor: MailActionExecutor,
+    private val conversations: ConversationRepository,
+    private val commitments: ChatCommitmentDao,
 ) : ViewModel() {
-    val state = combine(repo.pendingActions, repo.mail, repo.allSelections, repo.allCalendars, repo.audit) { actions, mail, sel, cal, audit ->
+    private val mailState = combine(repo.pendingActions, repo.mail, repo.allSelections, repo.allCalendars, repo.audit) { actions, mail, sel, cal, audit ->
         val byId = mail.associateBy { it.emailId }
         ActionsState(
-            actions.map { a -> ActionCard(a, byId[a.emailId], sel.lastOrNull { it.actionId == a.id }, cal.firstOrNull { it.emailId == a.emailId }) },
-            audit,
+            cards = actions.map { a -> ActionCard(a, byId[a.emailId], sel.lastOrNull { it.actionId == a.id }, cal.firstOrNull { it.emailId == a.emailId }) },
+            audit = audit,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ActionsState())
+    val state = combine(mailState, conversations.observeActionable(), commitments.all()) { mail, chats, list ->
+        val now = System.currentTimeMillis()
+        mail.copy(chats = chats, commitmentReview = list.count { it.status == "REVIEW_NEEDED" },
+            commitmentUpcoming = list.count { it.status in setOf("CONFIRMED", "SNOOZED") && (it.dueAt == null || it.dueAt >= now) },
+            commitmentOverdue = list.count { it.status in setOf("CONFIRMED", "SNOOZED") && it.dueAt != null && it.dueAt < now })
+    }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ActionsState())
     val message = MutableStateFlow<String?>(null)
 
     fun approveAndSend(id: String) = viewModelScope.launch {
@@ -110,7 +126,7 @@ private fun at(ms: Long?) = ms?.let { stamp.format(Instant.ofEpochMilli(it).atZo
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MailActionsScreen(
-    onBack: () -> Unit, openReply: (String) -> Unit, openCalendar: (String) -> Unit, openEmail: (String) -> Unit,
+    onBack: () -> Unit, openConversation: (Conversation) -> Unit, openCommitments: () -> Unit, openReply: (String) -> Unit, openCalendar: (String) -> Unit, openEmail: (String) -> Unit,
     vm: MailActionsViewModel = hiltViewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
@@ -125,10 +141,20 @@ fun MailActionsScreen(
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item(key = "header") {
-                Text(tr("AI proposes. You approve. Nothing is sent, attached or added to your calendar without you."),
+                Text(tr("One review queue for chats and email. Nothing is sent, attached or added to your calendar without you."),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (state.cards.isEmpty()) item(key = "empty") { EmptyState(tr("You're all caught up"), tr("New actions appear here when an email needs something from you.")) }
+            if (state.chats.isEmpty() && state.cards.isEmpty()) item(key = "empty") { EmptyState(tr("You're all caught up"), tr("New actions appear here when a chat or email needs something from you.")) }
+            if (state.chats.isNotEmpty()) {
+                item(key = "chat-title") { Text(tr("Chat decisions"), style = MaterialTheme.typography.titleMedium) }
+                items(state.chats, key = { "chat-${it.id}" }) { chat -> ChatActionCard(chat, Modifier.animateItem(), { openConversation(chat) }) }
+            }
+            item(key = "commitments") { Card(onClick = openCommitments, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp)) {
+                Column(Modifier.padding(16.dp)) { Text(tr("Commitments"), style = MaterialTheme.typography.titleMedium)
+                    Text("${state.commitmentReview} need review · ${state.commitmentOverdue} overdue · ${state.commitmentUpcoming} upcoming", style = MaterialTheme.typography.bodySmall)
+                }
+            } }
+            if (state.cards.isNotEmpty()) item(key = "mail-title") { Text(tr("Email actions"), style = MaterialTheme.typography.titleMedium) }
             itemsIndexed(state.cards, key = { _, it -> it.action.id }) { index, card ->
                 com.iamode.app.ui.components.Entrance(card.action.id, index, seen) {
                 ActionCardView(card, modifier = Modifier.animateItem(),
@@ -147,6 +173,24 @@ fun MailActionsScreen(
                 item(key = "audit-title") { Text(tr("Activity"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp)) }
                 items(state.audit, key = { "audit-${it.id}" }) { AuditRow(it) }
             }
+        }
+    }
+}
+
+@Composable
+private fun ChatActionCard(chat: Conversation, modifier: Modifier, onReview: () -> Unit) {
+    val (headline, detail, tint) = when (chat.status) {
+        ConversationStatus.CRISIS -> Triple(tr("Personal attention needed"), tr("Potential crisis detected. IA Mode did not reply."), MaterialTheme.colorScheme.error)
+        ConversationStatus.CALLBACK -> Triple(tr("Call back"), chat.reason ?: tr("A missed call needs your follow-up."), MaterialTheme.colorScheme.tertiary)
+        else -> Triple(tr("Reply needs approval"), chat.reason ?: tr("Review the draft before anything is sent."), MaterialTheme.colorScheme.primary)
+    }
+    Card(onClick = onReview, modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = tint.copy(alpha = 0.10f))) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(headline, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("${chat.channel.label} · ${chat.displayName}", style = MaterialTheme.typography.labelLarge)
+            Text(detail, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            OutlinedButton(onClick = onReview) { Text(tr("Review safely")) }
         }
     }
 }

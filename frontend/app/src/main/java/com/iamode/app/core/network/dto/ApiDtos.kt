@@ -25,6 +25,8 @@ data class ProcessMessageRequest(
     val user: UserContextDto,
     val subject: String? = null,
     val messages: List<ChatMessageDto>,
+    /** Deterministic target from the other person's latest inbound message. */
+    @SerialName("reply_language") val replyLanguage: LanguageHintDto? = null,
     @SerialName("money_mode") val moneyMode: String,
 )
 
@@ -80,7 +82,14 @@ data class RecapRequest(val contact: ContactDto, val messages: List<ChatMessageD
 data class RecapResponse(val recap: String, @SerialName("prompt_version") val promptVersion: String)
 
 @Serializable
-data class HealthResponse(val status: String, @SerialName("prompt_version") val promptVersion: String? = null)
+data class HealthResponse(
+    val status: String, @SerialName("api_version") val apiVersion: String? = null,
+    @SerialName("release_version") val releaseVersion: String? = null,
+    @SerialName("prompt_version") val promptVersion: String? = null,
+    @SerialName("uptime_seconds") val uptimeSeconds: Int? = null,
+    @SerialName("ai_configured") val aiConfigured: Boolean? = null,
+    @SerialName("auth_configured") val authConfigured: Boolean? = null,
+)
 
 @Serializable
 data class AuthCheckResponse(val ok: Boolean, @SerialName("auth_mode") val authMode: String)

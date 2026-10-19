@@ -38,6 +38,9 @@ import com.iamode.app.domain.repository.SituationProvider
 import com.iamode.app.domain.usecase.EndConversationUseCase
 import com.iamode.app.domain.usecase.ProcessIncomingMessageUseCase
 import com.iamode.app.domain.usecase.ResolveContactUseCase
+import com.iamode.app.service.worker.MessageBurstCoordinator
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -53,12 +56,14 @@ class PipelineTest {
         val convs = linkedMapOf<String, Conversation>()
         val msgs = mutableListOf<Message>()
         override fun observeForSession(sessionId: String): Flow<List<Conversation>> = emptyFlow()
+        override fun observeActionable(): Flow<List<Conversation>> = emptyFlow()
         override fun observe(id: String): Flow<Conversation?> = emptyFlow()
         override fun observeMessages(conversationId: String): Flow<List<Message>> = emptyFlow()
         override suspend fun get(id: String) = convs[id]
         override suspend fun findOpen(channel: Channel, address: String, sessionId: String) =
             convs.values.lastOrNull { it.channel == channel && it.address == address && it.sessionId == sessionId && it.status.isOpen }
         override suspend fun upsert(conversation: Conversation) { convs[conversation.id] = conversation }
+        override suspend fun claimForSend(id: String, now: Long): Boolean = convs.containsKey(id)
         override suspend fun addMessage(message: Message): Boolean {
             if (message.externalId != null && msgs.any { it.conversationId == message.conversationId && it.externalId == message.externalId }) return false
             msgs += message.copy(id = msgs.size + 1L); return true
@@ -121,6 +126,7 @@ class PipelineTest {
         val s = Session("s1", 0L)
         override val activeSession = MutableStateFlow<Session?>(s)
         override val lastEnded: Flow<Session?> = emptyFlow()
+        override fun observeRecentEnded(limit: Int): Flow<List<Session>> = emptyFlow()
         override suspend fun current(): Session? = activeSession.value
         override suspend fun get(id: String) = s
         override suspend fun start(source: StartSource, autoKey: String?, autoReason: String?) = s
@@ -133,6 +139,7 @@ class PipelineTest {
     private val pipeline = ProcessIncomingMessageUseCase(
         convs, ResolveContactUseCase(contacts, phonebook), settings, sessions, ai, rec, rec, rec, rec, situation,
         EndConversationUseCase(convs, ai, rec, rec, rec),
+        MessageBurstCoordinator(CoroutineScope(Dispatchers.Unconfined), 0L),
     )
 
     private fun msg(id: String, text: String = "Can you send the invoice?") =

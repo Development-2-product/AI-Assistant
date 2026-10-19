@@ -18,6 +18,8 @@ class Settings(BaseSettings):
 
     environment: Literal["development", "staging", "production"] = "development"
     log_level: str = "INFO"
+    # Human-readable deploy revision only; never put secrets or URLs in this value.
+    release_version: str = "unknown"
 
     gemini_api_key: str = ""
     gemini_model_fast: str = "gemini-3.5-flash-lite"
@@ -37,6 +39,16 @@ class Settings(BaseSettings):
 
     rate_limit_per_minute: int = 60
     redis_url: str = ""
+
+    # WhatsApp Cloud is deliberately off until a verified Meta business integration is configured.
+    # These values are backend-only secrets; Android builds must never receive them.
+    whatsapp_cloud_enabled: bool = False
+    whatsapp_graph_version: str = ""
+    whatsapp_phone_number_id: str = ""
+    whatsapp_business_account_id: str = ""
+    whatsapp_system_user_token: str = ""
+    whatsapp_app_secret: str = ""
+    whatsapp_webhook_verify_token: str = ""
 
     prompt_version: str = "2026-09-v4"
     max_messages_in_context: int = 14
@@ -58,6 +70,14 @@ class Settings(BaseSettings):
             raise ValueError("DEV_API_TOKEN is required when AUTH_MODE=dev")
         if "*" in self.cors_origins:
             raise ValueError("CORS_ALLOWED_ORIGINS cannot contain '*' for an authenticated API")
+        if self.whatsapp_cloud_enabled:
+            required = (
+                self.whatsapp_graph_version, self.whatsapp_phone_number_id,
+                self.whatsapp_business_account_id, self.whatsapp_system_user_token,
+                self.whatsapp_app_secret, self.whatsapp_webhook_verify_token,
+            )
+            if not all(required):
+                raise ValueError("WhatsApp Cloud is enabled but required backend-only Meta configuration is missing")
         return self
 
 

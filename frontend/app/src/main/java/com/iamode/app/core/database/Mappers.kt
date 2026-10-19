@@ -7,6 +7,7 @@ import com.iamode.app.core.database.entity.MessageEntity
 import com.iamode.app.domain.model.Alert
 import com.iamode.app.domain.model.AlertKind
 import com.iamode.app.domain.model.Channel
+import com.iamode.app.domain.model.ContactAutoReplyControl
 import com.iamode.app.domain.model.Contact
 import com.iamode.app.domain.model.Conversation
 import com.iamode.app.domain.model.ConversationStatus
@@ -31,7 +32,8 @@ fun ConversationEntity.toDomain() = Conversation(
     mentionsMoney = mentionsMoney, asksCommitment = asksCommitment, reason = reason, sendAt = sendAt,
     aiGenerated = aiGenerated, isCallReply = isCallReply, recap = recap, subject = subject,
     gmailAccount = gmailAccount, gmailThreadId = gmailThreadId, gmailMessageId = gmailMessageId,
-    gmailReferences = gmailReferences, createdAt = createdAt, updatedAt = updatedAt, endedAt = endedAt,
+    gmailReferences = gmailReferences, forceApproval = forceApproval, contactPolicyReason = contactPolicyReason,
+    createdAt = createdAt, updatedAt = updatedAt, endedAt = endedAt,
 )
 
 fun Conversation.toEntity() = ConversationEntity(
@@ -42,6 +44,7 @@ fun Conversation.toEntity() = ConversationEntity(
     asksCommitment = asksCommitment, reason = reason, sendAt = sendAt, aiGenerated = aiGenerated,
     isCallReply = isCallReply, recap = recap, subject = subject, gmailAccount = gmailAccount,
     gmailThreadId = gmailThreadId, gmailMessageId = gmailMessageId, gmailReferences = gmailReferences,
+    forceApproval = forceApproval, contactPolicyReason = contactPolicyReason,
     createdAt = createdAt, updatedAt = updatedAt, endedAt = endedAt,
 )
 
@@ -58,12 +61,18 @@ fun Message.toEntity() = MessageEntity(
 fun ContactEntity.toDomain() = Contact(
     id = id, displayName = displayName, phone = phone, email = email,
     relationship = enumOr(relationship, Relationship.FRIEND),
-    language = languageCode?.let { enumOr(it, LanguageCode.EN) }, script = enumOr(script, Script.ROMAN),
+    language = languageCode?.let { enumOr(it, LanguageCode.EN) }, script = enumOr(script, Script.ROMAN), memoryNote = memoryNote,
+    autoReplyControl = enumOr(autoReplyControl, ContactAutoReplyControl.DEFAULT),
+    allowedAutoReplyChannels = allowedAutoReplyChannels?.split(',')?.mapNotNull { name -> Channel.entries.firstOrNull { it.name == name } }?.toSet()
+        ?: Channel.entries.toSet(),
+    autoReplyStartHour = autoReplyStartHour, autoReplyEndHour = autoReplyEndHour,
 )
 
 fun Contact.toEntity() = ContactEntity(
     id = id, displayName = displayName, phone = phone, email = email?.lowercase(),
-    relationship = relationship.name, languageCode = language?.name, script = script.name,
+    relationship = relationship.name, languageCode = language?.name, script = script.name, memoryNote = memoryNote?.trim()?.ifBlank { null },
+    autoReplyControl = autoReplyControl.name, allowedAutoReplyChannels = allowedAutoReplyChannels.joinToString(",") { it.name },
+    autoReplyStartHour = autoReplyStartHour, autoReplyEndHour = autoReplyEndHour,
 )
 
 fun AlertEntity.toDomain() = Alert(

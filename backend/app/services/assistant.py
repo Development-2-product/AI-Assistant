@@ -6,7 +6,7 @@ from app.core.config import Settings
 from app.core.logging import log_event
 from app.schemas.calls import MissedCallRequest, RecapRequest
 from app.schemas.common import Channel, Relationship
-from app.schemas.messages import Analysis, ProcessMessageRequest, RestyleRequest
+from app.schemas.messages import Analysis, DraftedAnalysis, ProcessMessageRequest, RestyleRequest
 from app.schemas.mail import MailIntelligence, MailIntelligenceRequest, ReplyDraft, ReplyDraftRequest
 from app.services import mail_rules, safety
 from app.services.gemini_client import LLMClient, LLMError
@@ -90,11 +90,40 @@ class AssistantService:
                 "reply only to what was asked of the user, address that person by name, keep it to one short line, "
                 "and never reply on behalf of anyone else in the group.")
 
+    @staticmethod
+    def _language_instruction(req) -> str:
+        target = getattr(req, "reply_language", None)
+        if target is None:
+            return "Follow the language and script of the other person's latest message exactly."
+        if target.lang == "en":
+            return "Write the reply in English using English letters. Do not switch to an Indian language."
+        if target.script == "native":
+            return f"Write the reply in {language_name(target.lang)} using its native script only."
+        return f"Write the reply in {language_name(target.lang)} using English letters (Roman script), not native script."
+
     # ---------- incoming message ----------
     async def process_message(self, req: ProcessMessageRequest) -> tuple[Analysis, str]:
         v = self._common(channel=req.channel, name=req.contact.name, relationship=req.contact.relationship,
                          user=req.user, subject=req.subject, messages=req.messages)
-        analysis = await self._json(self.s.gemini_model_fast, render("analyze", **v), Analysis)
+        drafted = await self._json(
+            self.s.gemini_model_fast,
+            render(
+                "process", **v, **self._rules(v),
+                language_instruction=self._language_instruction(req),
+                group_rules=self._group_rules(req.contact.relationship, req.contact.name),
+                format_rules=self._format_rules(req.channel, v["user_name"]),
+            ),
+            DraftedAnalysis,
+        )
+        analysis = Analysis.model_validate(drafted.model_dump(exclude={"reply"}))
+
+        # The Android client derives this from the exact latest inbound text. Keep the
+        # returned UI metadata aligned with the writer's enforced target as well.
+        if req.reply_language is not None:
+            analysis = analysis.model_copy(update={
+                "language": req.reply_language.lang,
+                "script": req.reply_language.script,
+            })
 
         last_text = next((m.text for m in reversed(req.messages) if m.sender == "them"), "")
         if safety.detect_crisis(last_text):
@@ -104,8 +133,7 @@ class AssistantService:
             log_event(logger, "process_no_reply", crisis=analysis.crisis, state=analysis.conversation_state)
             return analysis, ""
 
-        reply = await self._write_reply(req, v, analysis.style, analysis.conversation_state,
-                                        analysis.mentions_money or analysis.asks_commitment)
+        reply = safety.clean_reply(drafted.reply, req.channel.value)
 
         convo_text = "\n".join(m.text for m in req.messages)
         risky = analysis.mentions_money or analysis.asks_commitment
@@ -120,12 +148,14 @@ class AssistantService:
             "ongoing": "Keep the conversation natural. Don't add questions just to prolong it.",
         }.get(state, "")
         money_instruction = ""
+        language_instruction = self._language_instruction(req)
         if risky and req.contact.relationship.is_professional:
             money_instruction = ("Money or a commitment came up: acknowledge it politely but DO NOT agree to any "
                                  "amount, date or terms. Say you will check and confirm shortly.")
         prompt = render("reply", **v, **self._rules(v), style=style, conversation_state=state,
                         group_rules=self._group_rules(req.contact.relationship, req.contact.name),
                         state_instruction=state_instruction, money_instruction=money_instruction,
+                        language_instruction=language_instruction,
                         format_rules=self._format_rules(req.channel, v["user_name"]))
         text = await self._text(self.s.gemini_model_writer, prompt)
         return safety.clean_reply(text, req.channel.value)

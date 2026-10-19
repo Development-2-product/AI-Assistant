@@ -77,7 +77,7 @@ import java.time.LocalTime
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnostics: () -> Unit, openMailActions: () -> Unit, openMailIntelligence: () -> Unit, vm: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnostics: () -> Unit, openMailActions: () -> Unit, openMailIntelligence: () -> Unit, openCommitments: () -> Unit = {}, openPrivacy: () -> Unit = {}, vm: SettingsViewModel = hiltViewModel()) {
     val s by vm.state.collectAsStateWithLifecycle()
     val accounts by vm.gmailAccounts.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
@@ -110,6 +110,7 @@ fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnost
                 onClick = openDiagnostics)
             SettingRow(tr("Mail"), tr("Your Gmail sorted: documents, interviews, opportunities and more"), onClick = openMailIntelligence)
             SettingRow(tr("⚡ AI Actions"), tr("Replies, documents and calendar events waiting for your approval"), onClick = openMailActions)
+            SettingRow(tr("Commitments"), tr("Promises from chats that need review or follow-up"), onClick = openCommitments)
 
             AppLanguageSection()
 
@@ -254,6 +255,7 @@ fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnost
                 Switch(s.crashReports, { v -> vm.update { it.copy(crashReports = v) } })
             }
             SettingRow(tr("Permissions"), tr("See what IA Mode can access"), onClick = openPermissions)
+            SettingRow(tr("Privacy dashboard"), tr("Review and delete encrypted local IA Mode data"), onClick = openPrivacy)
             Text(tr("Conversations are stored encrypted on this phone and deleted after 30 days. The AI server keeps nothing."),
                 style = MaterialTheme.typography.labelSmall, color = IAColors.Grey)
             TextButton(onClick = { confirmDelete = true }) { Text(tr("Delete all conversations"), color = MaterialTheme.colorScheme.error) }

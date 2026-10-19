@@ -27,6 +27,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
@@ -54,6 +56,8 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.iamode.app.domain.model.Contact
+import com.iamode.app.domain.model.ContactAutoReplyControl
+import com.iamode.app.domain.model.Channel
 import com.iamode.app.domain.model.LanguageCode
 import com.iamode.app.domain.model.Relationship
 import com.iamode.app.domain.model.Script
@@ -63,12 +67,15 @@ import com.iamode.app.ui.components.readableWidth
 import com.iamode.app.ui.components.EmptyState
 import com.iamode.app.ui.components.RelationshipPill
 import com.iamode.app.ui.theme.IAColors
+import com.iamode.app.ui.components.time
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContactsScreen(onBack: () -> Unit, vm: ContactsViewModel = hiltViewModel()) {
     val contacts by vm.all.collectAsStateWithLifecycle()
+    val commitmentCounts by vm.commitmentCounts.collectAsStateWithLifecycle()
+    val relationshipInsights by vm.relationshipInsights.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<Contact?>(null) }
 
     Scaffold(
@@ -100,7 +107,14 @@ fun ContactsScreen(onBack: () -> Unit, vm: ContactsViewModel = hiltViewModel()) 
                                 .joinToString(" · "))
                         },
                         leadingContent = { Avatar(c.displayName, c.relationship) },
-                        trailingContent = { RelationshipPill(c.relationship) },
+                        trailingContent = {
+                            Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
+                                RelationshipPill(c.relationship)
+                                commitmentCounts[c.id]?.takeIf { it.open + it.completed > 0 }?.let {
+                                    Text("${it.open} open · ${it.overdue} overdue", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        },
                         modifier = Modifier.animateItem().clickable { editing = c },
                     )
                     HorizontalDivider(Modifier.animateItem())
@@ -111,13 +125,13 @@ fun ContactsScreen(onBack: () -> Unit, vm: ContactsViewModel = hiltViewModel()) 
 
     editing?.let { c ->
         ModalBottomSheet(onDismissRequest = { editing = null }) {
-            ContactEditor(c, onSave = { vm.save(it); editing = null }, onDelete = { vm.delete(c.id); editing = null })
+            ContactEditor(c, relationshipInsights[c.id] ?: ContactsViewModel.RelationshipInsight(), onSave = { vm.save(it); editing = null }, onDelete = { vm.delete(c.id); editing = null })
         }
     }
 }
 
 @Composable
-private fun ContactEditor(initial: Contact, onSave: (Contact) -> Unit, onDelete: () -> Unit) {
+private fun ContactEditor(initial: Contact, insight: ContactsViewModel.RelationshipInsight, onSave: (Contact) -> Unit, onDelete: () -> Unit) {
     val context = LocalContext.current
     var name by remember { mutableStateOf(initial.displayName) }
     var phone by remember { mutableStateOf(initial.phone.orEmpty()) }
@@ -125,6 +139,11 @@ private fun ContactEditor(initial: Contact, onSave: (Contact) -> Unit, onDelete:
     var relationship by remember { mutableStateOf(initial.relationship) }
     var language by remember { mutableStateOf(initial.language) }
     var script by remember { mutableStateOf(initial.script) }
+    var memoryNote by remember { mutableStateOf(initial.memoryNote.orEmpty()) }
+    var autoReplyControl by remember { mutableStateOf(initial.autoReplyControl) }
+    var allowedChannels by remember { mutableStateOf(initial.allowedAutoReplyChannels) }
+    var startHour by remember { mutableStateOf(initial.autoReplyStartHour?.toString().orEmpty()) }
+    var endHour by remember { mutableStateOf(initial.autoReplyEndHour?.toString().orEmpty()) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickContact()) { uri ->
         uri?.let { readContact(context, it) }?.let { (n, p) -> name = n; if (p != null) phone = p }
@@ -151,13 +170,53 @@ private fun ContactEditor(initial: Contact, onSave: (Contact) -> Unit, onDelete:
                 Script.entries.forEach { s -> FilterChip(script == s, { script = s }, { Text(tr(s.label)) }) }
             }
         }
+        OutlinedTextField(memoryNote, { memoryNote = it.take(500) }, label = { Text(tr("Private preferences / note")) },
+            supportingText = { Text(tr("Encrypted on this phone. Never sent automatically.")) }, minLines = 2, maxLines = 4, modifier = Modifier.fillMaxWidth())
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(tr("Relationship intelligence"), style = MaterialTheme.typography.titleSmall)
+                if (insight.conversations == 0) {
+                    Text(tr("No local conversation activity is stored for this contact yet."), style = MaterialTheme.typography.bodySmall, color = IAColors.Grey)
+                } else {
+                    Text("${insight.conversations} conversations · ${insight.received} received · ${insight.sent} sent", style = MaterialTheme.typography.bodySmall)
+                    if (insight.needsReview > 0) Text("${insight.needsReview} replies need review", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                    insight.lastActivity?.let { Text("Last local activity ${time(it)}", style = MaterialTheme.typography.bodySmall, color = IAColors.Grey) }
+                }
+                Text(tr("On-device metadata only. IA Mode does not analyse or reveal message content here."), style = MaterialTheme.typography.labelSmall, color = IAColors.Grey)
+            }
+        }
+        HorizontalDivider(Modifier.padding(vertical = 6.dp))
+        Text(tr("Automatic reply controls"), style = MaterialTheme.typography.titleSmall)
+        Text(tr("These controls only restrict automatic replies. You can still review and send a reply yourself."),
+            style = MaterialTheme.typography.bodySmall, color = IAColors.Grey)
+        ChipRow {
+            ContactAutoReplyControl.entries.forEach { control ->
+                FilterChip(autoReplyControl == control, { autoReplyControl = control }, { Text(tr(control.label)) })
+            }
+        }
+        if (autoReplyControl == ContactAutoReplyControl.DEFAULT) {
+            Text(tr("Channels allowed to auto-reply"), style = MaterialTheme.typography.bodyMedium)
+            ChipRow {
+                Channel.entries.filter { it != Channel.GMAIL }.forEach { channel ->
+                    FilterChip(channel in allowedChannels, {
+                        allowedChannels = if (channel in allowedChannels) allowedChannels - channel else allowedChannels + channel
+                    }, { Text(tr(channel.label)) })
+                }
+            }
+            Text(tr("Optional allowed hours (0–23, device time)"), style = MaterialTheme.typography.bodyMedium)
+            OutlinedTextField(startHour, { startHour = it.filter(Char::isDigit).take(2) }, label = { Text(tr("From")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(endHour, { endHour = it.filter(Char::isDigit).take(2) }, label = { Text(tr("Until")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        }
         Spacer(Modifier.height(4.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = {
                     onSave(initial.copy(displayName = name.trim(), phone = phone.trim().ifBlank { null },
                         email = email.trim().lowercase().ifBlank { null }, relationship = relationship,
-                        language = language, script = script))
+                        language = language, script = script, memoryNote = memoryNote.trim().ifBlank { null },
+                        autoReplyControl = autoReplyControl, allowedAutoReplyChannels = allowedChannels,
+                        autoReplyStartHour = startHour.toIntOrNull()?.takeIf { it in 0..23 },
+                        autoReplyEndHour = endHour.toIntOrNull()?.takeIf { it in 0..23 }))
                 },
                 enabled = name.isNotBlank(),
             ) { Text(tr("Save")) }

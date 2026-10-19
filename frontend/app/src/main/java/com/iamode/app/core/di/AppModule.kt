@@ -58,7 +58,7 @@ object AppModule {
             .openHelperFactory(SupportOpenHelperFactory(passphrase))
             // Every schema change must ship a Migration (schemas are exported to app/schemas).
             // Only a downgrade (installing an older build) wipes local data.
-            .addMigrations(IAModeDatabase.MIGRATION_1_2, IAModeDatabase.MIGRATION_2_3, IAModeDatabase.MIGRATION_3_4, IAModeDatabase.MIGRATION_4_5, IAModeDatabase.MIGRATION_5_6, IAModeDatabase.MIGRATION_6_7, IAModeDatabase.MIGRATION_7_8, IAModeDatabase.MIGRATION_8_9)
+            .addMigrations(IAModeDatabase.MIGRATION_1_2, IAModeDatabase.MIGRATION_2_3, IAModeDatabase.MIGRATION_3_4, IAModeDatabase.MIGRATION_4_5, IAModeDatabase.MIGRATION_5_6, IAModeDatabase.MIGRATION_6_7, IAModeDatabase.MIGRATION_7_8, IAModeDatabase.MIGRATION_8_9, IAModeDatabase.MIGRATION_9_10, IAModeDatabase.MIGRATION_10_11, IAModeDatabase.MIGRATION_11_12)
             .fallbackToDestructiveMigrationOnDowngrade()
             .build()
     }
@@ -66,6 +66,7 @@ object AppModule {
     @Provides fun conversationDao(db: IAModeDatabase) = db.conversationDao()
     @Provides fun messageDao(db: IAModeDatabase) = db.messageDao()
     @Provides fun contactDao(db: IAModeDatabase) = db.contactDao()
+    @Provides fun chatCommitmentDao(db: IAModeDatabase) = db.chatCommitmentDao()
     @Provides fun alertDao(db: IAModeDatabase) = db.alertDao()
     @Provides fun sessionDao(db: IAModeDatabase) = db.sessionDao()
     @Provides fun gmailAccountDao(db: IAModeDatabase) = db.gmailAccountDao()

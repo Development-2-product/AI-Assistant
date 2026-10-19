@@ -80,6 +80,12 @@ class ReplyPolicyTest {
         assertTrue(d is Decision.NeedsApproval)
     }
 
+    @Test fun `contact restriction overrides an automatic client policy`() {
+        val d = ReplyPolicy.decide(input(Relationship.CLIENT).copy(forceApproval = true, contactPolicyReason = "Anita always requires your approval"), analysis(), settings)
+        assertTrue(d is Decision.NeedsApproval && d.paused)
+        assertEquals("Anita always requires your approval", d.reason)
+    }
+
     @Test fun `groups always need approval even on autopilot`() {
         assertTrue(ReplyPolicy.decide(input(Relationship.GROUP, autopilot = true), analysis(), settings) is Decision.NeedsApproval)
     }

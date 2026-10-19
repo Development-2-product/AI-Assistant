@@ -21,6 +21,11 @@ import com.iamode.app.domain.model.IncomingMessage
 import com.iamode.app.domain.model.SendResult
 import com.iamode.app.domain.repository.Notifier
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import retrofit2.HttpException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -188,11 +193,27 @@ class GmailRepository @Inject constructor(
                 }
                 val unseen = source.refs.filterNot { isKnown(it.id) }
                 val capacity = limit - out.size
-                for (ref in unseen.take(capacity)) {
-                    val mail = GmailMessageParser.parse(api.get(bearer(token), ref.id))
-                    if (mail.fromEmail == account.email) continue
-                    out += IntelligenceMail(account.email, mail, threadTexts(token, mail))
+                // Body + thread-context retrieval dominates mailbox latency. Keep a small
+                // bounded fan-out: it is much faster than serial fetches without bursting
+                // Gmail quotas or starving other accounts.
+                val fetched = coroutineScope {
+                    val gate = Semaphore(3)
+                    unseen.take(capacity).map { ref -> async {
+                        gate.withPermit {
+                            try {
+                                val mail = GmailMessageParser.parse(api.get(bearer(token), ref.id))
+                                if (mail.fromEmail == account.email) null
+                                else IntelligenceMail(account.email, mail, threadTexts(token, mail))
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                log.record("Mail", false, "${account.email}: couldn't fetch ${ref.id.take(12)}")
+                                null
+                            }
+                        }
+                    } }.awaitAll()
                 }
+                out += fetched.filterNotNull()
                 // Do not checkpoint a partial batch. A later worker will retry the same history
                 // range and skip already-classified IDs, so transient AI/network errors cannot lose mail.
                 if (unseen.size <= capacity) source.historyId?.let { checkpoints += HistoryCheckpoint(account.email, it) }
