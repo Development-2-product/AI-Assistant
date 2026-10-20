@@ -46,6 +46,10 @@ val releaseKeyAlias = privateCfg("RELEASE_KEY_ALIAS")
 val releaseKeyPassword = privateCfg("RELEASE_KEY_PASSWORD")
 val hasReleaseSigning = listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all(String::isNotBlank)
 val requestsReleaseTask = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+// This is the Play Store identity.  Keep it separate from `namespace`: changing
+// the Kotlin package would create a large, unnecessary source-code migration.
+val releaseApplicationId = "app.iamode.mobile"
+val debugApplicationId = "$releaseApplicationId.dev"
 
 if (requestsDebugTask && debugBackendUrl.isBlank()) {
     throw GradleException("iamode.backendUrl is required in the ignored frontend/local.properties for debug builds.")
@@ -74,8 +78,22 @@ val hasGoogleServices = sequenceOf(
 ).any { it.exists() }
 val hasReleaseFirebaseConfig = file("src/release/google-services.json").isFile
 val hasDebugFirebaseConfig = file("src/debug/google-services.json").isFile
-if (requestsReleaseTask && !hasReleaseFirebaseConfig) {
-    throw GradleException("Release Firebase config is required at app/src/release/google-services.json.")
+fun firebaseConfigMatches(file: File, expectedApplicationId: String): Boolean =
+    file.isFile && Regex("\\\"package_name\\\"\\s*:\\s*\\\"${Regex.escape(expectedApplicationId)}\\\"")
+        .containsMatchIn(file.readText())
+
+if (requestsReleaseTask && !firebaseConfigMatches(file("src/release/google-services.json"), releaseApplicationId)) {
+    throw GradleException(
+        "Release Firebase config for $releaseApplicationId is required at " +
+            "app/src/release/google-services.json. Download a fresh configuration from Firebase."
+    )
+}
+if (requestsDebugTask && hasDebugFirebaseConfig &&
+    !firebaseConfigMatches(file("src/debug/google-services.json"), debugApplicationId)
+) {
+    throw GradleException(
+        "Debug Firebase config must belong to $debugApplicationId. Download a fresh configuration from Firebase."
+    )
 }
 if (!hasDebugFirebaseConfig) logger.warn("Debug Firebase config is missing at app/src/debug/google-services.json; debug authentication will use iamode.devToken.")
 
@@ -91,7 +109,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.iamode.app"
+        applicationId = releaseApplicationId
         minSdk = 29
         targetSdk = 35
         versionCode = 10

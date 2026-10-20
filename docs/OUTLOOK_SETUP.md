@@ -14,7 +14,7 @@ once in Microsoft Entra ID (Azure), then put three values in `frontend/local.pro
 
 ## 2. Get your signature hashes (one per keystore)
 
-Debug and release are signed with different keys, and the debug app id is `com.iamode.app.dev`.
+Debug and release are signed with different keys, and the debug app id is `app.iamode.mobile.dev`.
 
 ```bash
 # Debug keystore (from frontend/app)
@@ -28,10 +28,10 @@ On Windows, use Git Bash (it includes openssl). Each command prints something li
 
 | Package name | Signature hash |
 |---|---|
-| `com.iamode.app.dev` | debug hash |
-| `com.iamode.app` | release hash |
+| `app.iamode.mobile.dev` | debug hash |
+| `app.iamode.mobile` | release hash |
 
-Azure shows the redirect URI it expects (`msauth://com.iamode.app.dev/<url-encoded hash>`). IA Mode builds exactly
+Azure shows the redirect URI it expects (`msauth://app.iamode.mobile.dev/<url-encoded hash>`). IA Mode builds exactly
 that at runtime, so you don't need to copy it anywhere.
 
 ## 4. API permissions (API permissions → Add → Microsoft Graph → Delegated)

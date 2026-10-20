@@ -142,7 +142,7 @@ cd frontend
 
 The debug build talks to the backend with a shared dev token. For anything you give to other people:
 
-1. Create Firebase Android apps for `com.iamode.app.dev` (debug) and `com.iamode.app` (release), and enable
+1. Create Firebase Android apps for `app.iamode.mobile.dev` (debug) and `app.iamode.mobile` (release), and enable
    **Anonymous** sign-in.
 2. Put their variant-specific configurations in `frontend/app/src/debug/google-services.json` and
    `frontend/app/src/release/google-services.json`; never use a root shared config.
