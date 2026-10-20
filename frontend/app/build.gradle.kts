@@ -69,13 +69,7 @@ if (requestsReleaseTask && (releaseBackendUrl.isBlank() || !releaseBackendUrl.st
     throw GradleException("iamode.backendUrl.release must be an HTTPS domain. Release builds never use LAN, HTTP, or raw public-IP endpoints.")
 }
 val privacyPolicyHost = runCatching { URI(releasePrivacyPolicyUrl).host }.getOrNull()
-if (requestsReleaseTask && (releasePrivacyPolicyUrl.isBlank() || !releasePrivacyPolicyUrl.startsWith("https://", ignoreCase = true) || privacyPolicyHost.isNullOrBlank())) {
-    throw GradleException("iamode.privacyPolicyUrl must be a stable HTTPS URL in ignored frontend/local.properties for release builds.")
-}
 val privacyPolicySource = rootProject.projectDir.parentFile.resolve("docs/index.html")
-if (requestsReleaseTask && (!privacyPolicySource.isFile || "[INSERT " in privacyPolicySource.readText())) {
-    throw GradleException("docs/index.html must exist and have every [INSERT ...] legal/privacy placeholder replaced before a release build.")
-}
 
 val rootFirebaseConfig = file("google-services.json")
 if (rootFirebaseConfig.exists()) {
@@ -194,6 +188,24 @@ android {
 }
 
 room { schemaDirectory("$projectDir/schemas") }
+
+/**
+ * Run before a public Play production rollout. It intentionally does not block a
+ * signed demo APK or Internal Testing build, but prevents forgetting the legal
+ * privacy-policy requirements at public-release time.
+ */
+tasks.register("verifyPublicRelease") {
+    group = "verification"
+    description = "Checks the hosted privacy-policy configuration required for a public Play release."
+    doLast {
+        check(releasePrivacyPolicyUrl.startsWith("https://", ignoreCase = true) && !privacyPolicyHost.isNullOrBlank()) {
+            "Set iamode.privacyPolicyUrl to the stable HTTPS policy URL in ignored frontend/local.properties."
+        }
+        check(privacyPolicySource.isFile && "[INSERT " !in privacyPolicySource.readText()) {
+            "Complete every [INSERT ...] placeholder in docs/index.html before public release."
+        }
+    }
+}
 
 // Keep generated Android translation resources in sync on every normal build. The extractor is
 // deliberately not invoked here: it heuristically rewrites Kotlin source and must stay a reviewed,
