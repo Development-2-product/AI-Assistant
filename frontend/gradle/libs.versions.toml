@@ -1,5 +1,6 @@
 [versions]
-agp = "8.7.3"
+# API 36 is supported by AGP 8.10.x (Gradle 8.11.1 is already pinned by the wrapper).
+agp = "8.10.1"
 kotlin = "2.1.0"
 ksp = "2.1.0-1.0.29"
 hilt = "2.54"
@@ -75,6 +76,7 @@ play-services-location = { group = "com.google.android.gms", name = "play-servic
 play-services-auth = { group = "com.google.android.gms", name = "play-services-auth", version.ref = "playAuth" }
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-auth = { group = "com.google.firebase", name = "firebase-auth" }
+firebase-appcheck-playintegrity = { group = "com.google.firebase", name = "firebase-appcheck-playintegrity" }
 firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
 glance-appwidget = { group = "androidx.glance", name = "glance-appwidget", version.ref = "glance" }
 sqlcipher-android = { group = "net.zetetic", name = "sqlcipher-android", version.ref = "sqlcipher" }

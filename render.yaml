@@ -7,7 +7,7 @@ services:
     dockerfilePath: ./Dockerfile
     plan: free
     region: singapore
-    healthCheckPath: /v1/health
+    healthCheckPath: /v1/ready
     envVars:
       - key: ENVIRONMENT
         value: production
@@ -19,6 +19,12 @@ services:
         value: "false"
       - key: FIREBASE_PROJECT_ID
         value: ia-mode-509514
+      # Leave false until Play Integrity App Check is registered and verified in
+      # Firebase. Then set true together with the service-account JSON secret.
+      - key: ENFORCE_APP_CHECK
+        value: "false"
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
       - key: GEMINI_MODEL_FAST
         value: gemini-3.5-flash-lite
       - key: GEMINI_MODEL_WRITER
@@ -28,4 +34,8 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: REDIS_URL
+        sync: false
+      # Set this in Render to the documented proxy IP/CIDR(s) for your deployment.
+      # Do not use '*', otherwise a public origin can trust forged X-Forwarded-For headers.
+      - key: FORWARDED_ALLOW_IPS
         sync: false

@@ -39,6 +39,7 @@ fun requiredBackendUrl(name: String): String {
 val requestsDebugTask = gradle.startParameter.taskNames.any { it.contains("debug", ignoreCase = true) }
 val debugBackendUrl = cfg("iamode.backendUrl")
 val releaseBackendUrl = cfg("iamode.backendUrl.release")
+val releasePrivacyPolicyUrl = cfg("iamode.privacyPolicyUrl")
 val devToken = cfg("iamode.devToken", "")
 val releaseStoreFile = privateCfg("RELEASE_STORE_FILE")
 val releaseStorePassword = privateCfg("RELEASE_STORE_PASSWORD")
@@ -66,6 +67,14 @@ val releaseHost = runCatching { URI(releaseBackendUrl).host }.getOrNull()
 val rawIpHost = releaseHost?.matches(Regex("^\\d{1,3}(?:\\.\\d{1,3}){3}$")) == true || releaseHost?.contains(":") == true
 if (requestsReleaseTask && (releaseBackendUrl.isBlank() || !releaseBackendUrl.startsWith("https://", ignoreCase = true) || releaseHost.isNullOrBlank() || rawIpHost)) {
     throw GradleException("iamode.backendUrl.release must be an HTTPS domain. Release builds never use LAN, HTTP, or raw public-IP endpoints.")
+}
+val privacyPolicyHost = runCatching { URI(releasePrivacyPolicyUrl).host }.getOrNull()
+if (requestsReleaseTask && (releasePrivacyPolicyUrl.isBlank() || !releasePrivacyPolicyUrl.startsWith("https://", ignoreCase = true) || privacyPolicyHost.isNullOrBlank())) {
+    throw GradleException("iamode.privacyPolicyUrl must be a stable HTTPS URL in ignored frontend/local.properties for release builds.")
+}
+val privacyPolicySource = rootProject.projectDir.parentFile.resolve("docs/index.html")
+if (requestsReleaseTask && (!privacyPolicySource.isFile || "[INSERT " in privacyPolicySource.readText())) {
+    throw GradleException("docs/index.html must exist and have every [INSERT ...] legal/privacy placeholder replaced before a release build.")
 }
 
 val rootFirebaseConfig = file("google-services.json")
@@ -106,14 +115,16 @@ if (hasGoogleServices) {
 
 android {
     namespace = "com.iamode.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = releaseApplicationId
         minSdk = 29
-        targetSdk = 35
-        versionCode = 10
-        versionName = "1.9.0"
+        targetSdk = 36
+        // Version code 11 is already in Play Internal Testing. Every new AAB
+        // must increment it; never reuse a code already accepted by Play.
+        versionCode = 12
+        versionName = "1.9.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -136,10 +147,12 @@ android {
         debug {
             applicationIdSuffix = ".dev"
             buildConfigField("String", "BACKEND_URL", "\"${normalisedUrl(debugBackendUrl.ifBlank { "https://example.invalid" })}\"")
+            buildConfigField("String", "PRIVACY_POLICY_URL", "\"\"")
             buildConfigField("String", "DEV_API_TOKEN", "\"$devToken\"")
             // Debug normally targets a local AUTH_MODE=dev backend, even when
             // google-services.json is present for release builds.
             buildConfigField("boolean", "USE_FIREBASE_AUTH", "false")
+            buildConfigField("boolean", "USE_FIREBASE_APP_CHECK", "false")
             buildConfigField("String", "MSAL_CLIENT_ID", "\"$msalClientId\"")
             buildConfigField("String", "MSAL_SIGNATURE_HASH", "\"$msalHashDebug\"")
             manifestPlaceholders["msalSignatureHash"] = msalHashDebug.ifBlank { "not-configured" }
@@ -152,10 +165,12 @@ android {
             // Release uses Firebase authentication. A production backend must use
             // AUTH_MODE=firebase and the matching Firebase project.
             buildConfigField("String", "BACKEND_URL", "\"${normalisedUrl(releaseBackendUrl)}\"")
+            buildConfigField("String", "PRIVACY_POLICY_URL", "\"$releasePrivacyPolicyUrl\"")
             buildConfigField("String", "DEV_API_TOKEN", "\"\"")
             // A release APK must use Firebase; without google-services.json it
             // fails sign-in rather than silently sending a dev credential.
             buildConfigField("boolean", "USE_FIREBASE_AUTH", "true")
+            buildConfigField("boolean", "USE_FIREBASE_APP_CHECK", "true")
             buildConfigField("String", "MSAL_CLIENT_ID", "\"$msalClientId\"")
             buildConfigField("String", "MSAL_SIGNATURE_HASH", "\"$msalHashRelease\"")
             manifestPlaceholders["msalSignatureHash"] = msalHashRelease.ifBlank { "not-configured" }
@@ -254,6 +269,7 @@ dependencies {
     implementation(libs.play.services.auth)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth)
+    implementation(libs.firebase.appcheck.playintegrity)
     implementation(libs.firebase.crashlytics)
     implementation(libs.glance.appwidget)
 

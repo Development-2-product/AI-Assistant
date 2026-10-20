@@ -120,6 +120,13 @@ def test_health_is_public(client):
     assert "gemini_api_key" not in r.text and "firebase_project_id" not in r.text
 
 
+def test_ready_is_public_and_redacted(client):
+    r = client.get("/v1/ready")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ready"
+    assert "gemini_api_key" not in r.text and "firebase_project_id" not in r.text
+
+
 def test_api_sets_conservative_response_headers(client):
     r = client.get("/v1/health")
     assert r.headers["cache-control"] == "no-store"

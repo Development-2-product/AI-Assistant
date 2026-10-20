@@ -121,6 +121,7 @@ class PipelineTest {
         override val settings = MutableStateFlow(UserSettings())
         override suspend fun current() = settings.value
         override suspend fun update(transform: (UserSettings) -> UserSettings) { settings.value = transform(settings.value) }
+        override suspend fun clear() { settings.value = UserSettings() }
     }
     private val sessions = object : SessionRepository {
         val s = Session("s1", 0L)

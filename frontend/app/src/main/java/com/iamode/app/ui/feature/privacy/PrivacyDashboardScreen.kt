@@ -1,5 +1,7 @@
 package com.iamode.app.ui.feature.privacy
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -42,7 +44,12 @@ import com.iamode.app.core.database.dao.MailIntelligenceDao
 import com.iamode.app.core.database.dao.MailWorkflowDao
 import com.iamode.app.core.database.dao.ConversationDao
 import com.iamode.app.core.database.dao.MessageDao
+import com.iamode.app.core.database.IAModeDatabase
+import com.iamode.app.BuildConfig
 import com.iamode.app.core.datastore.SeenMessageStore
+import com.iamode.app.core.diagnostics.DiagnosticsLog
+import com.iamode.app.data.gmail.GmailRepository
+import com.iamode.app.data.outlook.OutlookRepository
 import com.iamode.app.domain.repository.ConversationRepository
 import com.iamode.app.service.worker.CommitmentReminderScheduler
 import com.iamode.app.domain.usecase.ToggleIAModeUseCase
@@ -55,6 +62,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 data class PrivacyInventory(
@@ -66,6 +75,7 @@ enum class PrivacyDelete(val title: String, val detail: String) {
     CHAT("Delete chat history", "Deletes local conversations, messages and automation activity. It does not delete messages from WhatsApp, Telegram, Instagram or SMS."),
     CONTACTS("Delete contacts and linked commitments", "Deletes local contact labels, preferences and commitments linked to those contacts."),
     MAIL("Delete email intelligence metadata", "Deletes only IA Mode's local email classifications, drafts, action records, calendar extractions and document selections. It does not delete Gmail messages."),
+    ALL_LOCAL("Delete all IA Mode data", "Turns off IA Mode, disconnects locally stored mail accounts, and permanently deletes all IA Mode data on this device. It does not delete data held by Gmail, Microsoft, WhatsApp, your mobile carrier, Firebase, or other providers."),
 }
 
 @HiltViewModel
@@ -88,6 +98,11 @@ class PrivacyDashboardViewModel @Inject constructor(
     private val toggle: ToggleIAModeUseCase,
     private val reminders: CommitmentReminderScheduler,
     private val exporter: RedactedExport,
+    private val database: IAModeDatabase,
+    private val settings: com.iamode.app.domain.repository.SettingsRepository,
+    private val gmail: GmailRepository,
+    private val outlook: OutlookRepository,
+    private val diagnostics: DiagnosticsLog,
 ) : ViewModel() {
     val inventory: StateFlow<PrivacyInventory> = combine(
         conversations.observeCount(), messages.observeCount(), contacts.observeCount(), commitments.observeCount(),
@@ -117,6 +132,17 @@ class PrivacyDashboardViewModel @Inject constructor(
                 actionDao.deleteAllApprovals(); actionDao.deleteAllAudit(); actionDao.deleteAll()
                 workflow.deleteAllCandidates(); workflow.deleteAllSelections(); workflow.deleteAllCalendars()
                 workflow.deleteAllOpportunities(); workflow.deleteAllCelebrations(); mailDao.deleteAll()
+            }
+            PrivacyDelete.ALL_LOCAL -> {
+                // Stop new automation before clearing its state. Provider data is never deleted:
+                // account removal only clears IA Mode's local access/session state.
+                toggle.turnOff()
+                gmail.connectedAccounts.first().forEach { gmail.removeAccount(it.email) }
+                outlook.removeAllAccounts()
+                withContext(Dispatchers.IO) { database.clearAllTables() }
+                settings.clear()
+                seen.clear()
+                diagnostics.clear()
             }
         }
     }
@@ -149,6 +175,14 @@ fun PrivacyDashboardScreen(onBack: () -> Unit, vm: PrivacyDashboardViewModel = h
             PrivacyCard("Chat history", "${inventory.conversations} conversations · ${inventory.messages} messages · ${inventory.activity} activity records", PrivacyDelete.CHAT) { pending = it }
             PrivacyCard("Contacts and commitments", "${inventory.contacts} contacts · ${inventory.commitments} commitments", PrivacyDelete.CONTACTS) { pending = it }
             PrivacyCard("Email intelligence", "${inventory.mailItems} email records · ${inventory.mailActions} action records", PrivacyDelete.MAIL) { pending = it }
+            PrivacyCard("All IA Mode data", "Permanently erase all local IA Mode records, settings and connected-account records from this device", PrivacyDelete.ALL_LOCAL) { pending = it }
+            if (BuildConfig.PRIVACY_POLICY_URL.isNotBlank()) {
+                OutlinedButton(onClick = {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BuildConfig.PRIVACY_POLICY_URL)))
+                    }.onFailure { message = "Couldn't open the privacy policy" }
+                }) { Text("Open privacy policy") }
+            }
             Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Redacted encrypted export", style = MaterialTheme.typography.titleSmall)
                 Text("AES-GCM encrypted count-only export. It excludes messages, names, addresses, credentials, tokens and endpoints.", style = MaterialTheme.typography.bodySmall)
@@ -156,7 +190,7 @@ fun PrivacyDashboardScreen(onBack: () -> Unit, vm: PrivacyDashboardViewModel = h
             } }
             message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
             Spacer(Modifier.height(4.dp))
-            Text("Gmail account access is managed separately in Settings. Removing local metadata never deletes your provider mailbox.", style = MaterialTheme.typography.bodySmall)
+            Text("Deleting local IA Mode data does not delete provider mailboxes or revoke cloud-provider permissions. You can revoke Google or Microsoft access in those account settings.", style = MaterialTheme.typography.bodySmall)
         }
     }
     pending?.let { target -> AlertDialog(

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Privacy Policy for IA Mode for Android.">
+  <title>Privacy Policy | IA Mode</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#556176; --line:#dce2ec; --surface:#fff; --page:#f5f7fb; --accent:#2657c7; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--page); color:var(--ink); font:16px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:780px; margin:0 auto; padding:28px 20px 56px; }
+    article { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:clamp(24px,6vw,52px); box-shadow:0 6px 24px rgba(23,32,51,.06); }
+    h1,h2 { line-height:1.25; color:#101827; }
+    h1 { margin:0 0 8px; font-size:clamp(2rem,7vw,2.7rem); }
+    h2 { margin:2.25rem 0 .7rem; font-size:1.25rem; }
+    p,li { overflow-wrap:anywhere; }
+    .meta { margin:0; color:var(--muted); }
+    .notice { margin:1.5rem 0; padding:14px 16px; border-left:4px solid var(--accent); background:#f0f4ff; border-radius:4px; }
+    ul { padding-left:1.25rem; }
+    a { color:var(--accent); }
+    footer { margin-top:2.5rem; padding-top:1.25rem; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <article>
+      <h1>Privacy Policy for IA Mode</h1>
+      <p class="meta"><strong>Effective date:</strong> [INSERT EFFECTIVE DATE]</p>
+      <p class="meta"><strong>Last updated:</strong> October 20, 2026</p>
+
+      <p>This Privacy Policy explains how IA Mode handles information when you use its Android application. Before publishing, replace the bracketed legal-owner and contact placeholders with accurate details. The person or organisation that operates IA Mode is the data controller for applicable privacy laws: <strong>[INSERT LEGAL OWNER / CONTROLLER NAME AND ADDRESS]</strong>.</p>
+
+      <div class="notice">IA Mode provides communication, email, and productivity features that you choose to enable. The information it handles depends on the permissions, accounts, and features you select.</div>
+
+      <h2>1. Information IA Mode may handle</h2>
+      <p>Depending on the features you enable, IA Mode may handle:</p>
+      <ul>
+        <li>app settings, mode status, preferences, and records of actions taken in the app;</li>
+        <li>contact names, phone numbers, email addresses, relationship labels, and conversation context used to identify or respond to contacts;</li>
+        <li>notification content and metadata from supported apps, when you grant Android notification access;</li>
+        <li>missed-call and caller metadata when you enable the relevant phone or call-screening features;</li>
+        <li>SMS recipient information and message content when the SMS reply feature is enabled and Android permission is granted;</li>
+        <li>email account addresses, message metadata, message content, attachments or selected Drive documents, and drafts when you connect and use supported Gmail or Outlook features;</li>
+        <li>calendar, activity, usage, or one-time location information only if you grant the relevant optional permission and use the related feature; and</li>
+        <li>technical crash information if you turn on optional crash reporting.</li>
+      </ul>
+
+      <h2>2. Information stored and processed on your device</h2>
+      <p>IA Mode stores its working data on your device, including feature settings, locally retained communication and email information, drafts, action history, and connected-account records. This local database is encrypted using SQLCipher. Its encryption key is generated on the device and protected using Android Keystore facilities where available.</p>
+      <p>Local storage does not mean that a feature never communicates with a service. For example, connected email features communicate with the provider you choose, and AI-assisted features send the selected request context as described below. Removing IA Mode or using its in-app reset or deletion controls removes locally stored app data, subject to the normal behavior of Android backups and account providers outside IA Mode’s control.</p>
+
+      <h2>3. Authentication and service communications</h2>
+      <p>For production backend requests, IA Mode uses Firebase Authentication. The app may create an anonymous Firebase authentication session and send its authentication token to the IA Mode backend so that the backend can verify the request. Firebase processes this information under the <a href="https://firebase.google.com/support/privacy" rel="noopener noreferrer">Firebase Privacy Policy</a>.</p>
+      <p>When you use AI assistance, IA Mode sends the context needed for the requested task over encrypted network connections to the IA Mode backend and then to its configured AI service. In the current production design, this is Google Gemini. The context may include recent communication or email text, contact or account information, and your request, but IA Mode is designed not to send your complete device inbox by default. AI-assisted content leaves your device for processing; it is not end-to-end encrypted. Do not enable an AI feature if you do not want the information needed for that request to be processed by these services.</p>
+
+      <h2>4. Permissions and your choices</h2>
+      <p>IA Mode asks for permissions only to provide the feature that needs them. You can decline, revoke, or change most permissions in Android Settings, although the related feature may stop working.</p>
+      <ul>
+        <li><strong>Notification access:</strong> lets IA Mode read notifications from supported apps to provide notification-based communication features. Android shows a separate approval screen for this access.</li>
+        <li><strong>Notifications:</strong> lets IA Mode show reminders, approval requests, and send-status information.</li>
+        <li><strong>Phone, call-screening, contacts, and SMS:</strong> support missed-call responses, caller recognition, and SMS features. SMS sending requires Android permission and is subject to Google Play restrictions.</li>
+        <li><strong>Calendar, activity recognition, usage access, and location:</strong> are optional features used only when you choose the related functionality. Location is requested for a one-time location-sharing action.</li>
+        <li><strong>Battery and boot access:</strong> can help enabled background features continue after device restart or power-management limits.</li>
+      </ul>
+
+      <h2>5. Email and connected accounts</h2>
+      <p>If you connect Gmail, IA Mode may use the Google permissions you approve to read and organise mail, prepare replies, and perform the mail actions you request. If you connect Outlook or Microsoft 365, IA Mode may use the Microsoft permissions you approve to read, organise, draft, and send mail. If you select a Drive document for an email workflow, IA Mode may access that selected content using the Google permission you approve.</p>
+      <p>IA Mode may create drafts or suggestions from your email content. An email is sent only after your approval in the email review flow. You can disconnect an account in IA Mode and revoke the app’s access in your Google or Microsoft account settings. Revoking access does not itself remove local IA Mode data; use the deletion controls described below as well.</p>
+
+      <h2>6. Third-party services and sharing</h2>
+      <p>IA Mode does not state that it never shares information. Information is disclosed only as needed to operate the feature you choose, including to the following categories of recipients:</p>
+      <ul>
+        <li><strong>Firebase:</strong> authentication and, if you opt in, Crashlytics crash reporting;</li>
+        <li><strong>Google services:</strong> Google APIs for connected Gmail and Drive features, and the configured Google Gemini service for AI assistance;</li>
+        <li><strong>Microsoft:</strong> Microsoft Graph and Microsoft sign-in services for connected Outlook or Microsoft 365 features;</li>
+        <li><strong>communication and email providers:</strong> the provider or app selected when you send, reply to, organise, or otherwise act on a message; and</li>
+        <li><strong>service providers and legal recipients:</strong> hosting, security, or support providers acting for IA Mode, and authorities or other recipients where disclosure is required by law or necessary to protect rights, safety, or security.</li>
+      </ul>
+      <p>Third parties process information under their own terms and privacy policies. IA Mode does not sell personal information or use it for advertising based on the current product design.</p>
+
+      <h2>7. Security</h2>
+      <p>IA Mode uses reasonable technical measures intended to protect information, including encrypted local storage and HTTPS-only production network communication. No method of storage or transmission is completely secure, and we cannot guarantee absolute security. Keep your device protected and review the permissions and accounts connected to IA Mode.</p>
+
+      <h2>8. Retention and deletion</h2>
+      <p>Local app data is retained until you delete it, reset the app, or uninstall the app. Connected email, calendar, cloud-storage, and messaging providers retain information in accordance with their own policies and your account settings. Authentication, crash-reporting, backend, and hosting records may be retained for the period necessary to provide, secure, troubleshoot, and meet legal obligations for the service. <strong>[INSERT BACKEND / HOSTING LOG RETENTION PERIOD, IF APPLICABLE]</strong></p>
+      <p>To request deletion of personal information held outside your device, contact <strong>[INSERT PRIVACY CONTACT EMAIL OR HTTPS CONTACT FORM]</strong> with “Data Deletion Request” and enough information to identify the relevant account or request. We may need to verify your identity and may retain limited information where required or permitted by law. You can also delete local data by using the app’s deletion or reset controls or uninstalling the app, and revoke connected-account access through Google or Microsoft.</p>
+
+      <h2>9. Your rights</h2>
+      <p>Depending on where you live, you may have rights to request access to, correction of, deletion of, restriction of, or objection to certain processing of your personal information, and to receive a portable copy where applicable. To exercise these rights, use the contact details below. You may also have the right to complain to your local data-protection authority.</p>
+
+      <h2>10. Children’s privacy</h2>
+      <p>IA Mode is not directed to children. Do not use IA Mode or provide personal information through it if you are below the minimum age required to consent to data processing in your country. If you believe a child has provided personal information to IA Mode, contact us so we can review and take appropriate action.</p>
+
+      <h2>11. Changes to this policy</h2>
+      <p>We may update this Privacy Policy to reflect changes to IA Mode, its data practices, or applicable law. We will post the updated policy at this HTTPS address and change the “Last updated” date. Where required, we will provide additional notice or obtain consent.</p>
+
+      <h2>12. Contact us</h2>
+      <p>For privacy questions, requests, or complaints, contact:</p>
+      <p><strong>[INSERT LEGAL OWNER / CONTROLLER NAME]</strong><br>[INSERT POSTAL ADDRESS, IF APPLICABLE]<br>[INSERT PRIVACY CONTACT EMAIL OR HTTPS CONTACT FORM]</p>
+
+      <p><strong>Account deletion:</strong> To request deletion of an IA Mode account or associated server-side data, visit the <a href="delete-account.html">Account Deletion Request page</a>.</p>
+
+      <footer>Publish this document at a stable public HTTPS URL, link it from the Google Play listing and the app, and replace every bracketed placeholder before release.</footer>
+    </article>
+  </main>
+</body>
+</html>

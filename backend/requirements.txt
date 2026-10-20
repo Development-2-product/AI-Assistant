@@ -6,4 +6,5 @@ google-genai==2.8.0
 google-auth==2.58.0
 requests==2.34.2
 CacheControl==0.14.4
+firebase-admin==7.7.0
 redis==5.2.1

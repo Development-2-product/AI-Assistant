@@ -25,7 +25,8 @@ class ChatReplySender @Inject constructor(@ApplicationContext private val contex
     // soon as Android removes the notification that supplied it.
     private val notificationActions = ConcurrentHashMap<String, String>()
     private val actionOwners = ConcurrentHashMap<String, String>()
-    private val recentlySent = ConcurrentHashMap<String, ArrayDeque<String>>()
+    private data class SentReply(val text: String, val sentAt: Long)
+    private val recentlySent = ConcurrentHashMap<String, ArrayDeque<SentReply>>()
 
     private fun key(channel: Channel, chat: String) = "${channel.name}:$chat"
 
@@ -69,8 +70,16 @@ class ChatReplySender @Inject constructor(@ApplicationContext private val contex
     }
 
     /** True if [text] is an echo of something IA Mode sent (not typed by the user). */
-    fun wasSentByUs(channel: Channel, chat: String, text: String): Boolean =
-        recentlySent[key(channel, chat)]?.any { it.trim() == text.trim() } == true
+    fun wasSentByUs(channel: Channel, chat: String, text: String): Boolean {
+        val now = System.currentTimeMillis()
+        val k = key(channel, chat)
+        val sent = recentlySent[k] ?: return false
+        synchronized(sent) {
+            while (sent.firstOrNull()?.sentAt?.let { now - it > ECHO_TTL_MS } == true) sent.removeFirst()
+            if (sent.isEmpty()) recentlySent.remove(k, sent)
+            return sent.any { it.text.trim() == text.trim() }
+        }
+    }
 
     fun send(channel: Channel, chat: String, text: String): SendResult {
         val k = key(channel, chat)
@@ -82,14 +91,35 @@ class ChatReplySender @Inject constructor(@ApplicationContext private val contex
         RemoteInput.addResultsToIntent(inputs, intent, results)
         return try {
             action.actionIntent.send(context, 0, intent)
-            recentlySent.getOrPut(k) { ArrayDeque() }.apply {
-                addLast(text)
-                while (size > 10) removeFirst()
+            // Keep only a short, bounded echo window. It prevents our outgoing
+            // notification echo being treated as a user message without retaining
+            // message text for the life of the process.
+            recentlySent.getOrPut(k) { ArrayDeque() }.let { sent -> synchronized(sent) {
+                val now = System.currentTimeMillis()
+                while (sent.firstOrNull()?.sentAt?.let { now - it > ECHO_TTL_MS } == true) sent.removeFirst()
+                sent.addLast(SentReply(text, now))
+                while (sent.size > MAX_ECHOES_PER_CHAT) sent.removeFirst()
             }
+            }
+            trimRecentChats(k)
             SendResult.Sent
         } catch (e: PendingIntent.CanceledException) {
             removeAction(k)
             SendResult.Failed("The ${channel.label} chat notification expired. Open ${channel.label} and reply manually; keep its chat notification active until IA Mode sends.")
         }
+    }
+
+    /** Bound the number of chat keys as well as the number of echoes in each chat. */
+    private fun trimRecentChats(currentKey: String) {
+        while (recentlySent.size > MAX_TRACKED_CHATS) {
+            val candidate = recentlySent.entries.firstOrNull { it.key != currentKey } ?: return
+            if (!recentlySent.remove(candidate.key, candidate.value)) return
+        }
+    }
+
+    private companion object {
+        const val ECHO_TTL_MS = 2 * 60 * 1000L
+        const val MAX_ECHOES_PER_CHAT = 10
+        const val MAX_TRACKED_CHATS = 256
     }
 }

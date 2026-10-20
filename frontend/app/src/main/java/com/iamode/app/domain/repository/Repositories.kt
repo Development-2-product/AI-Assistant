@@ -51,6 +51,8 @@ interface SettingsRepository {
     val settings: Flow<UserSettings>
     suspend fun current(): UserSettings
     suspend fun update(transform: (UserSettings) -> UserSettings)
+    /** Removes every locally stored preference, including onboarding and automation settings. */
+    suspend fun clear()
 }
 
 interface SessionRepository {

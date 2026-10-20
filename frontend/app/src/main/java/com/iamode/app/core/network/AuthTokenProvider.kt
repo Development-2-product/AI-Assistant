@@ -2,6 +2,7 @@ package com.iamode.app.core.network
 
 import android.content.Context
 import com.google.firebase.FirebaseApp
+import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.auth.FirebaseAuth
 import com.iamode.app.BuildConfig
 import com.iamode.app.core.diagnostics.DiagnosticsLog
@@ -45,14 +46,29 @@ class AuthTokenProvider @Inject constructor(
             null
         }
     }
+
+    /**
+     * A release request carries a short-lived App Check token in addition to its
+     * Firebase user token. The backend can enforce it after Play Integrity has
+     * been registered in Firebase; failed attestation never falls back to a dev token.
+     */
+    suspend fun appCheckToken(): String? {
+        if (!BuildConfig.USE_FIREBASE_APP_CHECK || FirebaseApp.getApps(context).isEmpty()) return null
+        return runCatching { FirebaseAppCheck.getInstance().getAppCheckToken(false).await().token }
+            .onFailure { error -> log.record("App Check", false, "Token unavailable: ${error.javaClass.simpleName}") }
+            .getOrNull()
+    }
 }
 
 class AuthInterceptor @Inject constructor(private val tokens: AuthTokenProvider) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         // OkHttp runs interceptors on its own background threads, so blocking here is safe.
-        val token = runCatching { runBlocking { tokens.token() } }.getOrNull()
+        val (token, appCheckToken) = runCatching {
+            runBlocking { tokens.token() to tokens.appCheckToken() }
+        }.getOrDefault(null to null)
         val request = chain.request().newBuilder().apply {
             if (token != null) header("Authorization", "Bearer $token")
+            if (appCheckToken != null) header("X-Firebase-AppCheck", appCheckToken)
         }.build()
         return chain.proceed(request)
     }

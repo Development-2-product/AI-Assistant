@@ -4,6 +4,7 @@ import com.iamode.app.core.di.ApplicationScope
 import com.iamode.app.domain.repository.ConversationRepository
 import com.iamode.app.domain.repository.ReplyScheduler
 import com.iamode.app.domain.usecase.SendReplyUseCase
+import com.iamode.app.domain.model.ConversationStatus
 import dagger.Lazy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -15,8 +16,8 @@ import javax.inject.Singleton
 
 /**
  * Holds each automatic reply for the undo window, then sends it.
- * The window is a few seconds and the app process is kept alive by the bound
- * notification listener, so an in-process timer is enough.
+ * The short undo window is handled in-process. If the process is recreated,
+ * [restore] only re-arms future sends and converts expired ones to approval.
  */
 @Singleton
 class SendScheduler @Inject constructor(
@@ -40,10 +41,28 @@ class SendScheduler @Inject constructor(
         jobs.remove(conversationId)?.cancel()
     }
 
-    /** Re-arms replies that were waiting when the app process was killed. */
+    /**
+     * Re-arm only future replies after a process restart. A reply whose undo window
+     * elapsed while IA Mode was not running must never be sent without a fresh user
+     * decision: the notification RemoteInput may also have expired.
+     */
     fun restore() {
         scope.launch {
-            conversations.queued().forEach { c -> schedule(c.id, c.sendAt ?: System.currentTimeMillis()) }
+            val now = System.currentTimeMillis()
+            conversations.queued().forEach { c ->
+                val sendAt = c.sendAt
+                if (sendAt != null && sendAt > now) {
+                    schedule(c.id, sendAt)
+                } else {
+                    conversations.upsert(c.copy(
+                        status = ConversationStatus.PENDING_APPROVAL,
+                        autopilot = false,
+                        sendAt = null,
+                        reason = "Automatic send paused after IA Mode restarted; review before sending",
+                        updatedAt = now,
+                    ))
+                }
+            }
         }
     }
 }

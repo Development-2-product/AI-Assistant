@@ -66,6 +66,10 @@ class SettingsRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun clear() {
+        store.edit { it.clear() }
+    }
+
     private fun Preferences.toSettings(): UserSettings {
         val d = UserSettings()
         val modes = this[K.REPLY_MODES]?.split(",")?.mapNotNull { pair ->

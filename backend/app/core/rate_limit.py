@@ -31,7 +31,8 @@ class RedisLimiter:
     def __init__(self, url: str) -> None:
         import redis.asyncio as redis
 
-        self._r = redis.from_url(url)
+        # A limiter outage must not leave request handlers hanging behind a dead Redis socket.
+        self._r = redis.from_url(url, socket_connect_timeout=3, socket_timeout=3, health_check_interval=30)
 
     async def allow(self, key: str, limit: int, window: int = 60) -> bool:
         try:
@@ -40,6 +41,13 @@ class RedisLimiter:
             if count == 1:
                 await self._r.expire(bucket, window + 5)
             return count <= limit
+        except Exception as exc:  # Redis/network client exceptions are provider-specific.
+            raise RateLimitUnavailable from exc
+
+    async def ready(self) -> None:
+        """Verify the shared limiter used by production requests is reachable."""
+        try:
+            await self._r.ping()
         except Exception as exc:  # Redis/network client exceptions are provider-specific.
             raise RateLimitUnavailable from exc
 
@@ -53,6 +61,22 @@ def _get_limiter():
         url = get_settings().redis_url
         _limiter = RedisLimiter(url) if url else InMemoryLimiter()
     return _limiter
+
+
+async def rate_limiter_ready() -> bool:
+    """Return whether the limiter needed for this deployment can serve traffic.
+
+    Development intentionally permits the in-memory limiter. Production validation
+    already requires Redis, so a failed ping here makes the readiness endpoint fail
+    instead of advertising an instance that will reject every protected request.
+    """
+    limiter = _get_limiter()
+    if isinstance(limiter, RedisLimiter):
+        try:
+            await limiter.ready()
+        except RateLimitUnavailable:
+            return False
+    return True
 
 
 async def rate_limited_user(

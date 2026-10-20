@@ -288,6 +288,11 @@ class OutlookRepository @Inject constructor(
 
     suspend fun removeAccount(email: String) { auth.signOut(email); accounts.delete(email) }
 
+    /** Removes every locally connected Microsoft account and its MSAL account entry. */
+    suspend fun removeAllAccounts() {
+        accounts.all().forEach { removeAccount(it.email) }
+    }
+
     val connectedAccounts = accounts.observeAll()
 
     private companion object { const val GRAPH = "https://graph.microsoft.com/v1.0" }

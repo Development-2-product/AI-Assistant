@@ -24,6 +24,14 @@ def test_production_requires_shared_rate_limiter():
         Settings(environment="production", auth_mode="firebase", firebase_project_id="ia-mode", gemini_api_key="x")
 
 
+def test_enforced_app_check_requires_admin_credentials():
+    with pytest.raises(ValidationError, match="FIREBASE_SERVICE_ACCOUNT_JSON"):
+        Settings(
+            environment="production", auth_mode="firebase", firebase_project_id="ia-mode",
+            gemini_api_key="x", redis_url="redis://test", enforce_app_check=True,
+        )
+
+
 def test_dev_auth_requires_explicit_token():
     with pytest.raises(ValidationError, match="DEV_API_TOKEN"):
         Settings(environment="development", auth_mode="dev", dev_api_token="")

@@ -7,11 +7,12 @@ development: a static DEV_API_TOKEN is accepted so the app can be tested without
 """
 import hashlib
 import hmac
+import json
 import logging
 from dataclasses import dataclass
 from functools import lru_cache
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -54,9 +55,28 @@ def verify_firebase_token(token: str, project_id: str) -> str:
     return uid
 
 
+@lru_cache
+def _firebase_admin_app():
+    """Initialise Admin SDK only when production App Check enforcement is enabled."""
+    import firebase_admin
+    from firebase_admin import credentials
+
+    raw = get_settings().firebase_service_account_json
+    if not raw:
+        raise ValueError("missing Firebase Admin credentials")
+    return firebase_admin.initialize_app(credentials.Certificate(json.loads(raw)))
+
+
+def verify_app_check_token(token: str) -> None:
+    from firebase_admin import app_check
+
+    app_check.verify_token(token, app=_firebase_admin_app())
+
+
 async def get_current_user(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     settings: Settings = Depends(get_settings),
+    app_check_token: str | None = Header(default=None, alias="X-Firebase-AppCheck"),
 ) -> AuthUser:
     if creds is None or not creds.credentials:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
@@ -76,9 +96,17 @@ async def get_current_user(
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "FIREBASE_PROJECT_ID is not set")
     try:
         uid = await run_in_threadpool(verify_firebase_token, token, settings.firebase_project_id)
-        return AuthUser(uid=uid)
     except Exception:  # noqa: BLE001 - any verification failure is a 401
         logger.warning("Firebase token verification failed")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "Firebase token rejected: the app isn't signed in to Firebase project "
                             f"'{settings.firebase_project_id}' (or it sent a dev token while AUTH_MODE=firebase)")
+    if settings.enforce_app_check:
+        if not app_check_token:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "App verification token is required")
+        try:
+            await run_in_threadpool(verify_app_check_token, app_check_token)
+        except Exception:  # noqa: BLE001 - never expose verifier/provider details to clients.
+            logger.warning("Firebase App Check verification failed")
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "App verification failed")
+    return AuthUser(uid=uid)

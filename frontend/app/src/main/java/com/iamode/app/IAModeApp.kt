@@ -10,6 +10,8 @@ import com.iamode.app.core.di.ApplicationScope
 import com.iamode.app.service.worker.ModeLifecycle
 import com.iamode.app.service.worker.SendScheduler
 import com.google.firebase.FirebaseApp
+import com.google.firebase.appcheck.FirebaseAppCheck
+import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.iamode.app.domain.model.ConversationStatus
 import com.iamode.app.domain.repository.ConversationRepository
@@ -83,6 +85,13 @@ class IAModeApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        // Must happen before Firebase Auth or any request asks for an App Check token.
+        // Debug builds deliberately do not use Play Integrity: they are not Play-distributed.
+        if (BuildConfig.USE_FIREBASE_APP_CHECK && FirebaseApp.getApps(this).isNotEmpty()) {
+            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                PlayIntegrityAppCheckProviderFactory.getInstance(),
+            )
+        }
         com.iamode.app.core.i18n.I18n.init(this)
         NotificationChannels.create(this)
         sendScheduler.restore()

@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     auth_mode: Literal["firebase", "dev"] = "firebase"
     dev_api_token: str = ""
     firebase_project_id: str = ""
+    # App Check is staged: deploy client support and register Play Integrity first,
+    # then enable this to reject requests that do not originate from a valid app.
+    enforce_app_check: bool = False
+    firebase_service_account_json: str = ""
 
     # Comma-separated browser origins. Android clients do not need CORS, so the
     # safe default is to allow no browser origin until one is explicitly set.
@@ -76,6 +80,8 @@ class Settings(BaseSettings):
                 raise ValueError("GEMINI_API_KEY is required when ENVIRONMENT=production")
             if not self.redis_url:
                 raise ValueError("REDIS_URL is required when ENVIRONMENT=production so rate limits are shared")
+            if self.enforce_app_check and not self.firebase_service_account_json:
+                raise ValueError("FIREBASE_SERVICE_ACCOUNT_JSON is required when ENFORCE_APP_CHECK=true")
         if self.auth_mode == "dev" and not self.dev_api_token:
             raise ValueError("DEV_API_TOKEN is required when AUTH_MODE=dev")
         if "*" in self.cors_origins:

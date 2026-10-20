@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Account deletion request information for IA Mode.">
+  <meta name="robots" content="index,follow">
+  <title>IA Mode — Account Deletion Request</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#556176; --line:#dce2ec; --surface:#fff; --page:#f5f7fb; --accent:#2657c7; --accent-dark:#1b429d; --note:#f0f4ff; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--page); color:var(--ink); font:16px/1.65 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:780px; margin:0 auto; padding:28px 20px 56px; }
+    article { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:clamp(24px,6vw,52px); box-shadow:0 6px 24px rgba(23,32,51,.06); }
+    h1,h2 { color:#101827; line-height:1.25; }
+    h1 { margin:0 0 8px; font-size:clamp(2rem,7vw,2.7rem); }
+    h2 { margin:2.25rem 0 .7rem; font-size:1.25rem; }
+    p,li { overflow-wrap:anywhere; }
+    .meta { margin:0; color:var(--muted); }
+    .notice { margin:1.5rem 0; padding:14px 16px; border-left:4px solid var(--accent); border-radius:4px; background:var(--note); }
+    ol,ul { padding-left:1.3rem; }
+    .action { display:inline-block; margin:1rem 0 .25rem; padding:.8rem 1.05rem; border-radius:8px; background:var(--accent); color:#fff; font-weight:700; text-decoration:none; }
+    .action:hover,.action:focus { background:var(--accent-dark); }
+    a { color:var(--accent); }
+    .email { font-weight:700; }
+    footer { margin-top:2.5rem; padding-top:1.25rem; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <article>
+      <h1>IA Mode — Account Deletion Request</h1>
+      <p class="meta">Last updated: October 20, 2026</p>
+
+      <div class="notice">This page lets you submit an account-deletion request. Submitting a request does not automatically delete an account or data. IA Mode will review the request and may need to verify that you are authorised to make it.</div>
+
+      <h2>How to request deletion</h2>
+      <p>Email IA Mode support from an email address that can receive a reply. Use the subject line <strong>IA Mode Account Deletion Request</strong>.</p>
+      <p><a class="action" href="mailto:[INSERT_OFFICIAL_SUPPORT_EMAIL]?subject=IA%20Mode%20Account%20Deletion%20Request&amp;body=Please%20delete%20my%20IA%20Mode%20account%20and%20associated%20server-side%20data.%0A%0ARegistered%20account%20email%20(if%20applicable):%20%0AConnected%20email%20address%20(if%20applicable):%20%0AContact%20email%20for%20a%20reply:%20">Request Account Deletion</a></p>
+      <p>Official support email: <a class="email" href="mailto:[INSERT_OFFICIAL_SUPPORT_EMAIL]?subject=IA%20Mode%20Account%20Deletion%20Request">[INSERT_OFFICIAL_SUPPORT_EMAIL]</a></p>
+
+      <h2>What to include</h2>
+      <ol>
+        <li>Use the subject: <strong>IA Mode Account Deletion Request</strong>.</li>
+        <li>Include your registered IA Mode account email, if you have one.</li>
+        <li>If you use a connected Gmail, Outlook, or Microsoft 365 account, include the relevant connected email address.</li>
+        <li>Include an email address where support can contact you to verify the request and confirm its outcome.</li>
+        <li>Do not send passwords, authentication tokens, full message contents, or government identification by email.</li>
+      </ol>
+      <p>IA Mode currently uses Firebase anonymous authentication for production backend requests. An anonymous Firebase session does not necessarily have a registered email address. If that is your case, say so in the request and provide the connected account email, if any, plus a contact email for follow-up.</p>
+
+      <h2>What this request covers</h2>
+      <p>IA Mode can review a verified request for deletion of the Firebase Authentication user associated with the request and any IA Mode server-side data that can be identified and is under IA Mode’s control. The current backend implementation does not provide a public self-service deletion API and does not maintain a persistent application database of message, email, contact, or local-device records. It processes requests using the authenticated Firebase session, short-lived rate-limit records, and metadata-only operational logs.</p>
+      <p>Deleting an IA Mode/Firebase account does <strong>not</strong> automatically delete data stored on your device or data held by other providers. It also does not delete messages, mailboxes, calendar events, cloud files, or account records held by Gmail, Google Drive, Microsoft, WhatsApp, your mobile carrier, or other services.</p>
+
+      <h2>Delete local and connected data too</h2>
+      <p>To delete data stored on your device, open IA Mode’s <strong>Privacy Dashboard</strong> and choose <strong>Delete all IA Mode data</strong>, or uninstall the app. This clears IA Mode’s local SQLCipher-encrypted database, including locally stored settings, communication records, email intelligence records, drafts, action history, and locally stored connected-account records.</p>
+      <p>Before or after doing this, disconnect email accounts in IA Mode and revoke IA Mode’s access in your Google or Microsoft account settings if you no longer want those providers to authorise access. Provider-held data must be deleted through the relevant provider’s own controls.</p>
+
+      <h2>Retention and review</h2>
+      <p>We may retain the minimum information needed to verify and record a deletion request, prevent fraud or abuse, protect security, resolve disputes, or meet legal obligations. The current public policy does not set a fixed retention period for backend or hosting logs. A specific, accurate retention period must be configured and published before a fixed timeline can be promised.</p>
+      <p>IA Mode will not promise automatic deletion or a specific completion time on this page because no automated deletion workflow is implemented. Support will review a request, ask for any necessary verification, and confirm the outcome when the deletion work that can be completed has been completed.</p>
+
+      <h2>Associated-data requests</h2>
+      <p>You may use the same email process to request deletion of associated data held by IA Mode. Describe the data or feature involved and provide only the information needed to identify it. A request may require additional information to locate the relevant Firebase account or backend records. Deletion is limited to information that IA Mode controls and is not required to retain.</p>
+
+      <h2>Privacy Policy</h2>
+      <p>For information about how IA Mode handles data, read the <a href="index.html">IA Mode Privacy Policy</a>.</p>
+
+      <footer>This page is intended to be publicly available without sign-in at <code>https://YOUR-USERNAME.github.io/YOUR-REPOSITORY/delete-account.html</code>. Replace every <code>[INSERT_OFFICIAL_SUPPORT_EMAIL]</code> placeholder with the official monitored support email before publishing.</footer>
+    </article>
+  </main>
+</body>
+</html>

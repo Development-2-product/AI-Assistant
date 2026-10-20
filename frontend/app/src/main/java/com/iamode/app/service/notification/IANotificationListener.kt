@@ -81,7 +81,9 @@ class IANotificationListener : NotificationListenerService() {
             if (chat.channel !in s.enabledApps) return@launch
             if (chat.isGroup && !s.groupReplies) return@launch
 
-            chatLocks.getOrPut("${chat.channel}:${chat.chat}") { Mutex() }.withLock {
+            val lockKey = "${chat.channel}:${chat.chat}"
+            val lock = chatLocks.getOrPut(lockKey) { Mutex() }
+            lock.withLock {
                 // Unread group messages that don't mention you become context for the one that does.
                 val groupContext = mutableListOf<ContextMessage>()
                 for (m in chat.messages.sortedBy { it.timestamp }) {
@@ -112,6 +114,9 @@ class IANotificationListener : NotificationListenerService() {
                     groupContext.clear()
                 }
             }
+            // A lock is needed only while events for this chat are in flight. Do not
+            // retain an unbounded entry for every chat notification ever observed.
+            if (!lock.isLocked) chatLocks.remove(lockKey, lock)
         }
     }
 
