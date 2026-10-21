@@ -3,12 +3,15 @@ package com.iamode.app.ui.feature.settings
 import com.iamode.app.core.i18n.tr
 
 import android.app.TimePickerDialog
+import android.accounts.AccountManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.AnimatedVisibility
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,14 +22,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +59,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -68,6 +81,7 @@ import com.iamode.app.domain.model.ReplyMode
 import com.iamode.app.domain.model.Script
 import com.iamode.app.domain.model.VehicleType
 import com.iamode.app.ui.components.ChipRow
+import com.iamode.app.ui.components.AccountAvatar
 import com.iamode.app.ui.components.SectionTitle
 import com.iamode.app.ui.components.SettingRow
 import com.iamode.app.ui.components.readableWidth
@@ -84,6 +98,8 @@ fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnost
     val snackbar = remember { SnackbarHostState() }
     var confirmDelete by remember { mutableStateOf(false) }
     var showScheduleEditor by remember { mutableStateOf(false) }
+    var gmailToRemove by remember { mutableStateOf<String?>(null) }
+    var deleteGmailData by remember { mutableStateOf(false) }
     val context = LocalContext.current
     var permissionRefresh by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { permissionRefresh++ }
@@ -93,6 +109,11 @@ fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnost
 
     val gmailLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
         vm.onGmailAuthResult(it.resultCode, it.data)
+    }
+    val gmailAccountPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        vm.onGmailAccountPicked(it.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)) { pending ->
+            gmailLauncher.launch(IntentSenderRequest.Builder(pending.intentSender).build())
+        }
     }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.messageShown() } }
 
@@ -230,20 +251,11 @@ fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnost
                 Switch(s.showStatusNotification, { v -> vm.setStatusNotification(v) })
             }
 
-            SectionTitle(tr("Gmail accounts"))
-            accounts.forEach { a ->
-                SettingRow(a.email, if (a.needsReauth) tr("Needs reconnecting") else tr("Connected")) {
-                    if (a.needsReauth) TextButton(onClick = {
-                        vm.connectGmail { gmailLauncher.launch(IntentSenderRequest.Builder(it.intentSender).build()) }
-                    }) { Text(tr("Reconnect")) }
-                    TextButton(onClick = { vm.removeGmail(a.email) }) { Text(tr("Remove")) }
-                }
-            }
-            OutlinedButton(onClick = {
-                vm.connectGmail { gmailLauncher.launch(IntentSenderRequest.Builder(it.intentSender).build()) }
-            }) { Text(tr("Connect a Gmail account")) }
-            Text(tr("IA Mode reads your inbox to understand it. Replies always wait for your approval in AI Actions."),
-                style = MaterialTheme.typography.labelSmall, color = IAColors.Grey)
+            PremiumGmailConnectCard(
+                accounts = accounts,
+                onConnect = { vm.connectGmail { gmailAccountPickerLauncher.launch(it) } },
+                onRemove = { email -> deleteGmailData = false; gmailToRemove = email },
+            )
 
             OutlookSection()
 
@@ -275,6 +287,98 @@ fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnost
             confirmButton = { TextButton(onClick = { vm.deleteAllData(); confirmDelete = false }) { Text(tr("Delete")) } },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text(tr("Cancel")) } },
         )
+    }
+
+    gmailToRemove?.let { email ->
+        AlertDialog(
+            onDismissRequest = { gmailToRemove = null },
+            title = { Text(tr("Disconnect Gmail?")) },
+            text = {
+                Column {
+                    Text(tr("This removes %1\$s from IA Mode, revokes Gmail permission, and shows Google's account chooser when you reconnect.", email))
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Checkbox(checked = deleteGmailData, onCheckedChange = { deleteGmailData = it })
+                        Text(tr("Also delete this account's local mail, actions, and career records."), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.removeGmail(email, deleteGmailData); gmailToRemove = null }) { Text(tr("Disconnect")) }
+            },
+            dismissButton = { TextButton(onClick = { gmailToRemove = null }) { Text(tr("Cancel")) } },
+        )
+    }
+}
+
+/** A single, honest entry point for Google account selection and the existing OAuth consent flow. */
+@Composable
+private fun PremiumGmailConnectCard(
+    accounts: List<com.iamode.app.core.database.entity.GmailAccountEntity>,
+    onConnect: () -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+    ) {
+        Column(
+            Modifier.background(Brush.linearGradient(listOf(Color(0xFF102A56), Color(0xFF192064), Color(0xFF0A3D46))))
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.Surface(
+                    shape = RoundedCornerShape(15.dp), color = Color(0xFF3D86FF).copy(alpha = .25f),
+                ) { Icon(Icons.Filled.Email, null, tint = Color(0xFF9BC7FF), modifier = Modifier.padding(11.dp)) }
+                Spacer(Modifier.padding(horizontal = 6.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(tr("Gmail intelligence"), color = Color.White, style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        if (accounts.isEmpty()) tr("Connect an account to organize your inbox") else tr("Your connected inboxes stay separate and encrypted"),
+                        color = Color(0xFFC3D7FF), style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (accounts.isNotEmpty()) {
+                    androidx.compose.material3.Surface(shape = RoundedCornerShape(50), color = Color(0xFF1AB878).copy(alpha = .2f)) {
+                        Row(Modifier.padding(horizontal = 9.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.CheckCircle, null, tint = Color(0xFF65E2A8), modifier = Modifier.padding(end = 4.dp))
+                            Text(tr("Connected"), color = Color(0xFF80EDB8), style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
+            if (accounts.isEmpty()) {
+                Text(tr("IA Mode reads only the Gmail data you authorize. Messages are organized locally, and sending always requires your approval."),
+                    color = Color(0xFFD8E5FF), style = MaterialTheme.typography.bodyMedium)
+                FilledTonalButton(onClick = onConnect, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Add, null); Spacer(Modifier.padding(horizontal = 4.dp)); Text(tr("Choose a Google account"))
+                }
+            } else {
+                accounts.forEach { account ->
+                    androidx.compose.material3.Surface(shape = RoundedCornerShape(16.dp), color = Color(0xFF071B34).copy(alpha = .72f)) {
+                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            AccountAvatar(account.email, size = 42)
+                            Spacer(Modifier.padding(horizontal = 6.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(account.email, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                                Text(if (account.needsReauth) tr("Reconnect required") else tr("Gmail connected and ready"),
+                                    color = if (account.needsReauth) Color(0xFFFFCA73) else Color(0xFF8DE9BC), style = MaterialTheme.typography.labelSmall)
+                            }
+                            if (account.needsReauth) {
+                                TextButton(onClick = onConnect) { Icon(Icons.Filled.Refresh, null); Text(tr("Reconnect")) }
+                            }
+                            TextButton(onClick = { onRemove(account.email) }) { Text(tr("Remove"), color = Color(0xFFFFA4A4)) }
+                        }
+                    }
+                }
+                OutlinedButton(onClick = onConnect, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Add, null); Spacer(Modifier.padding(horizontal = 4.dp)); Text(tr("Connect another Gmail account"))
+                }
+            }
+            Text(tr("Google’s secure account picker opens next. IA Mode never sees or stores your Google password."),
+                style = MaterialTheme.typography.labelSmall, color = Color(0xFFAFC6EC))
+        }
     }
 }
 

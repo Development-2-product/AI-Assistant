@@ -161,6 +161,9 @@ class DiagnosticsRunner @Inject constructor(
         val detail = errorDetail(e)
         val fix = when {
             e.code() == 404 -> "Your server runs an older version. Update the backend (pull the new code, redeploy on Render)."
+            detail.contains("Dev token rejected") && auth.method == AuthMethod.FIREBASE ->
+                "The release app uses Firebase, but the deployed server is in development/dev-token mode. " +
+                    "In Render set ENVIRONMENT=production and AUTH_MODE=firebase, then redeploy."
             detail.contains("Dev token rejected") -> "Make iamode.devToken match DEV_API_TOKEN in backend/.env, then rebuild the debug APK."
             detail.contains("AUTH_MODE=dev is not allowed") -> "On the server set ENVIRONMENT=staging (keeps AUTH_MODE=dev), or switch to Firebase."
             auth.method == AuthMethod.DEV_TOKEN -> "The server expects Firebase (AUTH_MODE=firebase), but this app has no google-services.json. " +

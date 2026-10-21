@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -47,6 +48,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 
 data class DiagnosticsUiState(val running: Boolean = false, val results: List<CheckResult> = emptyList(),
@@ -84,8 +86,26 @@ class DiagnosticsViewModel @Inject constructor(@ApplicationContext private val c
         if (_state.value.running) return
         viewModelScope.launch {
             _state.update { it.copy(running = true, results = emptyList()) }
-            runner.run { partial -> _state.update { it.copy(results = partial) } }
-            _state.update { it.copy(running = false, recent = log.entries()) }
+            try {
+                runner.run { partial -> _state.update { it.copy(results = partial) } }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Diagnostics must never be able to take down the app. Keep the
+                // failure local and give the user a retryable, privacy-safe result.
+                log.record("Check", false, "Connection check stopped: ${e.javaClass.simpleName}")
+                _state.update { state ->
+                    state.copy(
+                        results = state.results + CheckResult(
+                            "Connection check", CheckStatus.FAIL,
+                            "The check stopped unexpectedly. The app remains usable.",
+                            "Run it again. If it repeats, share the redacted diagnostics report.",
+                        ),
+                    )
+                }
+            } finally {
+                _state.update { it.copy(running = false, recent = log.entries()) }
+            }
         }
     }
     fun report() = runner.report(_state.value.results)
@@ -129,8 +149,9 @@ fun DiagnosticsScreen(onBack: () -> Unit, vm: DiagnosticsViewModel = hiltViewMod
                 SectionTitle(tr("Recent activity")); Spacer(Modifier.weight(1f)); if (state.recent.isNotEmpty()) TextButton(onClick = vm::clearLog) { Text(tr("Clear")) }
             } }
             if (state.recent.isEmpty()) item(key = "recent-empty") { Text(tr("Nothing recorded yet."), color = IAColors.Grey) }
-            // Legacy stored logs can share timestamp and area. Positional keys are safe for this short read-only feed.
-            items(state.recent.take(25), key = { index -> "log-$index" }) { e -> Row(Modifier.animateItem(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Log entries can legitimately have identical content and timestamps. The indexed overload
+            // makes the list key positional, instead of accidentally using Entry.toString() as its key.
+            itemsIndexed(state.recent.take(25), key = { index, _ -> "log-$index" }) { _, e -> Row(Modifier.animateItem(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatusIcon(if (e.ok) CheckStatus.OK else CheckStatus.FAIL, Modifier.size(16.dp)); Column {
                     Text("${e.area}, ${time(e.time)}", style = MaterialTheme.typography.labelSmall, color = IAColors.Grey); Text(e.detail)
                 }

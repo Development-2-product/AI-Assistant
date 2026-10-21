@@ -49,6 +49,11 @@ interface MailWorkflowDao {
     @Query("DELETE FROM mail_document_candidates") suspend fun deleteAllCandidates()
     @Query("DELETE FROM mail_document_selections") suspend fun deleteAllSelections()
     @Query("DELETE FROM mail_celebrations") suspend fun deleteAllCelebrations()
+    @Query("DELETE FROM mail_opportunities WHERE emailId IN (:emailIds)") suspend fun deleteOpportunitiesForEmails(emailIds: List<String>)
+    @Query("DELETE FROM mail_calendar_extractions WHERE emailId IN (:emailIds)") suspend fun deleteCalendarsForEmails(emailIds: List<String>)
+    @Query("DELETE FROM mail_celebrations WHERE emailId IN (:emailIds)") suspend fun deleteCelebrationsForEmails(emailIds: List<String>)
+    @Query("DELETE FROM mail_document_candidates WHERE actionId IN (SELECT id FROM mail_actions WHERE emailId IN (:emailIds))") suspend fun deleteCandidatesForEmails(emailIds: List<String>)
+    @Query("DELETE FROM mail_document_selections WHERE emailId IN (:emailIds) OR actionId IN (SELECT id FROM mail_actions WHERE emailId IN (:emailIds))") suspend fun deleteSelectionsForEmails(emailIds: List<String>)
     @Query("SELECT uri, COUNT(*) AS times FROM mail_document_selections WHERE documentType = :type GROUP BY uri")
     suspend fun selectionCounts(type: String): List<UriCount>
 

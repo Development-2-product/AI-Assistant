@@ -86,11 +86,7 @@ object AppPermissions {
     @Suppress("DEPRECATION")
     private fun usageAccess(context: Context): Boolean {
         val ops = context.getSystemService(AppOpsManager::class.java)
-        val mode = if (Build.VERSION.SDK_INT >= 29) {
-            ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
-        } else {
-            ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
-        }
+        val mode = ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
         return mode == AppOpsManager.MODE_ALLOWED
     }
 }

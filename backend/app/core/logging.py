@@ -16,8 +16,11 @@ class JsonFormatter(logging.Formatter):
         extra = getattr(record, "extra_fields", None)
         if isinstance(extra, dict):
             payload.update(extra)
+        # Stack traces can embed provider error payloads, request URLs or other private data.
+        # Callers log a stable error type through log_event instead; production logs must not
+        # turn an incident investigation into a second data-retention channel.
         if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
+            payload["exception_type"] = record.exc_info[0].__name__
         return json.dumps(payload, ensure_ascii=False)
 
 

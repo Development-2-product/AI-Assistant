@@ -65,9 +65,11 @@ class DocumentViewing @Inject constructor(
         val ext = name.substringAfterLast('.', "").lowercase()
         try {
             val (fd, temp) = descriptor(uriString) ?: return@withContext Viewable.Failed("IA Mode can't open this file")
-            when {
+            var retainedByPdfViewer = false
+            try {
+                when {
                 ext == "pdf" || uriString.contains("export=pdf") -> try {
-                    Viewable.Pdf(PdfHandle(fd, temp))
+                    Viewable.Pdf(PdfHandle(fd, temp)).also { retainedByPdfViewer = true }
                 } catch (e: SecurityException) {
                     fd.close(); temp?.delete(); Viewable.Locked // password-protected
                 }
@@ -89,6 +91,14 @@ class DocumentViewing @Inject constructor(
                     t?.let(Viewable::Text) ?: Viewable.Unsupported
                 }
                 else -> { fd.close(); temp?.delete(); Viewable.Unsupported }
+            }
+            } finally {
+                // PdfHandle owns a descriptor only after it was successfully constructed. Every
+                // other path, including malformed/corrupt PDFs, releases both resources here.
+                if (!retainedByPdfViewer) {
+                    runCatching { fd.close() }
+                    temp?.delete()
+                }
             }
         } catch (e: Exception) {
             Viewable.Failed("This file couldn't be opened")

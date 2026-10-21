@@ -96,7 +96,13 @@ async def llm_error_handler(request: Request, exc: LLMError) -> JSONResponse:
     request_id = getattr(request.state, "request_id", "unknown")
     # Do not log exc text: SDK errors may contain provider/request details.
     log_event(logger, "ai_unavailable", id=request_id, error_type=type(exc.__cause__ or exc).__name__)
-    return JSONResponse(status_code=503, content={"detail": "AI temporarily unavailable. Try again shortly.", "request_id": request_id})
+    # Clients and background workers should back off rather than immediately retrying an exhausted
+    # model quota. The value matches the Android worker's minimum exponential retry delay.
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "AI temporarily unavailable. Try again shortly.", "request_id": request_id},
+        headers={"Retry-After": "60"},
+    )
 
 
 @app.exception_handler(Exception)

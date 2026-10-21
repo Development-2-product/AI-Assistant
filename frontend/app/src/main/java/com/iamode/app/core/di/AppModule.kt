@@ -9,6 +9,7 @@ import androidx.room.Room
 import com.iamode.app.BuildConfig
 import com.iamode.app.core.database.IAModeDatabase
 import com.iamode.app.core.network.AuthInterceptor
+import com.iamode.app.core.network.BackendTelemetryInterceptor
 import com.iamode.app.core.network.BaseUrlInterceptor
 import com.iamode.app.core.network.IAModeApi
 import com.iamode.app.core.security.DatabaseKeyManager
@@ -85,12 +86,19 @@ object AppModule {
     }
 
     @Provides @Singleton @BackendClient
-    fun backendHttp(baseUrl: BaseUrlInterceptor, auth: AuthInterceptor): OkHttpClient = OkHttpClient.Builder()
+    fun backendHttp(
+        baseUrl: BaseUrlInterceptor,
+        auth: AuthInterceptor,
+        telemetry: BackendTelemetryInterceptor,
+    ): OkHttpClient = OkHttpClient.Builder()
         .addInterceptor(baseUrl)
         .addInterceptor(auth)
+        .addNetworkInterceptor(telemetry)
         .addInterceptor(logging())
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS) // free-tier servers can take ~50 s to wake up
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(70, TimeUnit.SECONDS) // bounds a sleeping-server request without abandoning it too early
         .retryOnConnectionFailure(true)
         .build()
 

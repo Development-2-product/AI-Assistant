@@ -21,7 +21,7 @@ class DiagnosticsLog @Inject constructor(@ApplicationContext context: Context) {
 
     fun record(area: String, ok: Boolean, detail: String) = synchronized(lock) {
         val list = load().toMutableList()
-        list += Entry(System.currentTimeMillis(), area, ok, detail.take(300))
+        list += Entry(System.currentTimeMillis(), area, ok, redactDiagnosticDetail(detail))
         val trimmed = list.takeLast(MAX)
         val arr = JSONArray()
         trimmed.forEach { e ->

@@ -333,21 +333,30 @@ private fun CurrentLocationProposal(context: Context, busy: Boolean, onReplySele
 }
 
 private fun oneTimeLocation(context: Context, onLocation: (String) -> Unit, onError: (String) -> Unit) {
+    // Permission can be revoked between the Compose button check and this callback. Re-check at
+    // the point of use and handle that race rather than trusting a previous UI state.
+    val locationAllowed = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    if (!locationAllowed) return onError(tr("Location permission was not granted. No location was shared."))
     val manager = context.getSystemService(LocationManager::class.java)
     val provider = when {
         manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
         manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
         else -> null
     } ?: return onError(tr("Turn on Location to share your current location."))
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        manager.getCurrentLocation(provider, null, ContextCompat.getMainExecutor(context)) { location ->
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            manager.getCurrentLocation(provider, null, ContextCompat.getMainExecutor(context)) { location ->
+                if (location == null) onError(tr("Couldn't get a current location. Try again outside or with Location enabled."))
+                else onLocation("My current location: https://maps.google.com/?q=${location.latitude},${location.longitude}")
+            }
+        } else {
+            val location = manager.getLastKnownLocation(provider)
             if (location == null) onError(tr("Couldn't get a current location. Try again outside or with Location enabled."))
             else onLocation("My current location: https://maps.google.com/?q=${location.latitude},${location.longitude}")
         }
-    } else {
-        val location = manager.getLastKnownLocation(provider)
-        if (location == null) onError(tr("Couldn't get a current location. Try again outside or with Location enabled."))
-        else onLocation("My current location: https://maps.google.com/?q=${location.latitude},${location.longitude}")
+    } catch (_: SecurityException) {
+        onError(tr("Location permission was revoked. No location was shared."))
     }
 }
 

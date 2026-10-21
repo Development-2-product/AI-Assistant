@@ -6,6 +6,8 @@ import android.content.Intent
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.AuthorizationResult
 import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.auth.api.identity.RevokeAccessRequest
+import com.google.android.gms.common.AccountPicker
 import com.google.android.gms.common.api.Scope
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.tasks.await
@@ -30,7 +32,15 @@ class GmailAuthManager @Inject constructor(@ApplicationContext context: Context)
             .build()
 
     /** Starts the account picker / consent flow. If [AuthorizationResult.hasResolution], launch its pendingIntent. */
-    suspend fun beginAuthorization(): AuthorizationResult = client.authorize(request(null, SCOPES)).await()
+    /** Always select an address first; authorization below remains Google Identity's secure flow. */
+    fun accountPickerIntent(): Intent = AccountPicker.newChooseAccountIntent(
+        AccountPicker.AccountChooserOptions.Builder()
+            .setAllowableAccountsTypes(listOf("com.google"))
+            .setAlwaysShowAccountPicker(true)
+            .build(),
+    )
+
+    suspend fun beginAuthorization(email: String): AuthorizationResult = client.authorize(request(email, SCOPES)).await()
 
     /** Optional, separate consent for Google Drive document search on an already-connected account. */
     suspend fun beginDriveAuthorization(email: String): AuthorizationResult = client.authorize(request(email, DRIVE_SCOPES)).await()
@@ -56,6 +66,16 @@ class GmailAuthManager @Inject constructor(@ApplicationContext context: Context)
 
     fun invalidate(email: String) {
         cache.keys.filter { it.startsWith("$email|") }.forEach { cache.remove(it) }
+    }
+
+    /** Clears local tokens and revokes the selected account's Gmail grant at Google. */
+    suspend fun disconnect(email: String): Boolean {
+        invalidate(email)
+        val request = RevokeAccessRequest.builder()
+            .setAccount(Account(email, "com.google"))
+            .setScopes(SCOPES)
+            .build()
+        return runCatching { client.revokeAccess(request).await(); true }.getOrDefault(false)
     }
 
     private fun key(email: String, scopes: List<Scope>) = "$email|" + scopes.joinToString(",") { it.scopeUri }

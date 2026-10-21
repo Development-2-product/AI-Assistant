@@ -90,7 +90,10 @@ class HomeViewModel @Inject constructor(
             ) { list, alertList, sit, s, unread ->
                 HomeUiState(
                     session = session, situation = sit, manualSituation = s.manualSituation,
-                    needsYou = list.filter { it.status in NEEDS_YOU },
+                    // Older app versions could ingest an outgoing WhatsApp notification as
+                    // a one-to-one chat named "You". Hide that legacy self-echo immediately;
+                    // the listener now prevents it from being created again.
+                    needsYou = list.filter { it.status in NEEDS_YOU && !it.isLegacySelfEcho() },
                     handling = list.filter { it.status in HANDLING },
                     finished = list.filter { !it.status.isOpen },
                     alertCount = alertList.size,
@@ -111,6 +114,9 @@ class HomeViewModel @Inject constructor(
     private companion object {
         val NEEDS_YOU = setOf(ConversationStatus.PENDING_APPROVAL, ConversationStatus.CRISIS, ConversationStatus.CALLBACK)
         val HANDLING = setOf(ConversationStatus.ANALYZING, ConversationStatus.QUEUED, ConversationStatus.WAITING)
+
+        private fun Conversation.isLegacySelfEcho(): Boolean =
+            channel.name.startsWith("WHATSAPP") && displayName.trim().equals("you", ignoreCase = true)
     }
 
 }

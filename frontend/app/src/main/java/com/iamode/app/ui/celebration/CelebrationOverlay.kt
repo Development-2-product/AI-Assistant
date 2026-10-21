@@ -97,15 +97,23 @@ class CelebrationViewModel @Inject constructor(
     var active by mutableStateOf<ActiveCelebration?>(null)
         private set
     private val mailVisible = MutableStateFlow(false)
+    private var lastAutomaticCelebrationAt = 0L
     val sound = settings.settings.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     init {
         viewModelScope.launch {
             combine(coordinator.next, mailVisible) { celebration, visible -> celebration?.takeIf { visible } }.collect { c ->
                 if (c == null || active != null) return@collect
+                // A batch of accepted/selected emails must not trap the user behind a chain
+                // of full-screen effects. The dashboard retains every result; auto-present
+                // at most one achievement per 30 minutes and allow explicit replays.
+                if (System.currentTimeMillis() - lastAutomaticCelebrationAt < AUTO_CELEBRATION_COOLDOWN_MS) return@collect
                 val type = CelebrationType.entries.firstOrNull { it.name == c.type } ?: return@collect
                 // Claim first: only the caller that flips ELIGIBLE -> SHOWN plays it. Same email = once.
-                if (coordinator.claim(c.id)) active = ActiveCelebration(c, type, replay = false)
+                if (coordinator.claim(c.id)) {
+                    lastAutomaticCelebrationAt = System.currentTimeMillis()
+                    active = ActiveCelebration(c, type, replay = false)
+                }
             }
         }
         viewModelScope.launch {
@@ -124,6 +132,10 @@ class CelebrationViewModel @Inject constructor(
         viewModelScope.launch { coordinator.openDetails(emailId) }
     }
     fun setMailVisible(visible: Boolean) { mailVisible.value = visible }
+
+    private companion object {
+        const val AUTO_CELEBRATION_COOLDOWN_MS = 30 * 60 * 1000L
+    }
 }
 
 /** Device capability for the effect: fewer particles on low-end phones, a static card when motion is off. */

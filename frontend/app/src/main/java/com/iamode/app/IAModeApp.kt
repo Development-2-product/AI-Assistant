@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -49,7 +50,14 @@ class IAModeApp : Application(), Configuration.Provider {
         if (FirebaseApp.getApps(this).isEmpty()) return
         scope.launch {
             settings.settings.map { it.crashReports }.distinctUntilChanged().collect { enabled ->
-                FirebaseCrashlytics.getInstance().setCrashlyticsCollectionEnabled(enabled)
+                FirebaseCrashlytics.getInstance().apply {
+                    setCrashlyticsCollectionEnabled(enabled)
+                    // Operational context only: never attach account addresses, message content,
+                    // contact names, tokens or server responses to a crash report.
+                    setCustomKey("app_version", BuildConfig.VERSION_NAME)
+                    setCustomKey("build_type", BuildConfig.BUILD_TYPE)
+                    setCustomKey("app_check_enabled", BuildConfig.USE_FIREBASE_APP_CHECK)
+                }
             }
         }
     }
@@ -61,6 +69,22 @@ class IAModeApp : Application(), Configuration.Provider {
                 com.iamode.app.data.mail.MailSyncWorker.schedule(this@IAModeApp, enabled)
                 com.iamode.app.data.jobs.JobReminderWorker.schedule(this@IAModeApp, enabled)
                 if (enabled) com.iamode.app.data.mail.MailSyncWorker.syncNow(this@IAModeApp)
+            }
+        }
+    }
+
+    /**
+     * Five-minute refresh while IA Mode is visibly open. Android restricts background periodic
+     * work to a 15-minute minimum, so background freshness instead comes from Gmail/Outlook
+     * notifications plus that compliant fallback interval.
+     */
+    private fun keepForegroundMailFresh() {
+        scope.launch {
+            while (true) {
+                delay(5 * 60 * 1000L)
+                if (com.iamode.app.core.AppVisibility.foreground && settings.current().mailIntelligence) {
+                    com.iamode.app.data.mail.MailSyncWorker.syncNow(this@IAModeApp)
+                }
             }
         }
     }
@@ -104,6 +128,7 @@ class IAModeApp : Application(), Configuration.Provider {
         }
         applyCrashReportingSetting()
         keepMailSyncScheduled()
+        keepForegroundMailFresh()
         keepWidgetInSync()
     }
 }

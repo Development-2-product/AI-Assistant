@@ -23,4 +23,7 @@ interface JobApplicationDao {
     @Query("SELECT * FROM application_events WHERE applicationId = :id ORDER BY at DESC") fun observeEvents(id: String): Flow<List<ApplicationEventEntity>>
     @Query("SELECT applicationId FROM application_events WHERE emailId = :emailId LIMIT 1") suspend fun applicationForEmail(emailId: String): String?
     @Query("DELETE FROM application_events WHERE applicationId = :id") suspend fun deleteEvents(id: String)
+    @Query("SELECT DISTINCT applicationId FROM application_events WHERE emailId IN (:emailIds)") suspend fun applicationIdsForEmails(emailIds: List<String>): List<String>
+    @Query("DELETE FROM application_events WHERE emailId IN (:emailIds)") suspend fun deleteEventsForEmails(emailIds: List<String>)
+    @Query("DELETE FROM job_applications WHERE id IN (:ids) AND lastEmailId IN (:emailIds)") suspend fun deleteForEmails(ids: List<String>, emailIds: List<String>)
 }

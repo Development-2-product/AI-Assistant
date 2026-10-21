@@ -14,6 +14,8 @@ data class ParsedChat(
     val isGroup: Boolean,
     val messages: List<ParsedChatMessage>,
     val replyAction: Notification.Action?,
+    /** The messaging app's local identity, when it provides one. Never persisted. */
+    val selfName: String? = null,
 )
 
 /**
@@ -63,7 +65,7 @@ object ChatNotificationParser {
             }
             val chatName = if (style.isGroupConversation) style.conversationTitle?.toString()?.replace(COUNT_SUFFIX, "")?.trim() ?: title
             else title
-            return ParsedChat(channel, chatName, style.isGroupConversation, messages, replyAction)
+            return ParsedChat(channel, chatName, style.isGroupConversation, messages, replyAction, me)
         }
 
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: return null

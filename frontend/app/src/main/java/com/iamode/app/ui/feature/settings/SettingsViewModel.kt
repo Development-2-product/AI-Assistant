@@ -5,6 +5,7 @@ import com.iamode.app.core.i18n.tr
 import android.app.PendingIntent
 import android.app.Activity
 import android.content.Intent
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iamode.app.core.database.entity.GmailAccountEntity
@@ -23,7 +24,9 @@ import com.iamode.app.domain.usecase.ToggleIAModeUseCase
 import com.iamode.app.service.auto.AutoModeEvaluator
 import com.iamode.app.service.worker.ModeLifecycle
 import com.iamode.app.service.worker.CommitmentReminderScheduler
+import com.iamode.app.data.mail.MailSyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -36,6 +39,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val settings: SettingsRepository,
     private val gmail: GmailRepository,
     private val gmailAuth: GmailAuthManager,
@@ -60,10 +64,17 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settings.update(f) }
     }
 
-    /** Starts Google's consent flow. [launch] is called when the user must pick an account / approve scopes. */
-    fun connectGmail(launch: (PendingIntent) -> Unit) = viewModelScope.launch {
+    /** Always opens the device's Google account list before requesting Gmail authorization. */
+    fun connectGmail(chooseAccount: (Intent) -> Unit) = chooseAccount(gmailAuth.accountPickerIntent())
+
+    /** Starts Google's consent flow for the address the person selected. */
+    fun onGmailAccountPicked(email: String?, launch: (PendingIntent) -> Unit) = viewModelScope.launch {
+        if (email.isNullOrBlank()) {
+            _message.value = tr("Gmail connection was cancelled")
+            return@launch
+        }
         try {
-            val result = gmailAuth.beginAuthorization()
+            val result = gmailAuth.beginAuthorization(email)
             val pending = result.pendingIntent
             if (result.hasResolution() && pending != null) launch(pending)
             else result.accessToken?.let { addAccount(it) }
@@ -96,7 +107,10 @@ class SettingsViewModel @Inject constructor(
 
     private suspend fun addAccount(token: String) {
         val email = gmail.addAccount(token)
-        _message.value = tr("Connected %1\$s", email)
+        // The first scan is intentionally larger than ordinary background refreshes, but it
+        // remains bounded and is queued through WorkManager rather than blocking the consent UI.
+        MailSyncWorker.syncNow(context, limit = 40)
+        _message.value = tr("Connected %1\$s. Checking up to 40 recent emails now.", email)
     }
 
     fun setStatusNotification(show: Boolean) = viewModelScope.launch {
@@ -118,7 +132,11 @@ class SettingsViewModel @Inject constructor(
     fun addSchedule(schedule: AutoSchedule) = updateAuto { it.copy(schedules = it.schedules + schedule) }
     fun removeSchedule(index: Int) = updateAuto { a -> a.copy(schedules = a.schedules.filterIndexed { i, _ -> i != index }) }
 
-    fun removeGmail(email: String) = viewModelScope.launch { gmail.removeAccount(email) }
+    fun removeGmail(email: String, deleteLocalData: Boolean = false) = viewModelScope.launch {
+        val revoked = gmail.removeAccount(email, deleteLocalData)
+        _message.value = if (revoked) tr("Disconnected %1\$s. Choose an account again to reconnect.", email)
+        else tr("Disconnected %1\$s locally. Remove IA Mode from Google Account access when online.", email)
+    }
 
     fun deleteAllData() = viewModelScope.launch {
         toggle.turnOff()

@@ -73,6 +73,10 @@ class IANotificationListener : NotificationListenerService() {
 
     private fun handleChat(sbn: StatusBarNotification) {
         val chat = ChatNotificationParser.parse(sbn) ?: return
+        // Some messaging apps briefly publish an outgoing-message notification addressed to
+        // the local user (for example, a WhatsApp title of "You"). It is not an inbound chat
+        // and must never create a second approval card.
+        if (!chat.isGroup && chat.selfName != null && sameIdentity(chat.chat, chat.selfName)) return
         replySender.registerActive(sbn.key, chat)
 
         scope.launch {
@@ -123,5 +127,8 @@ class IANotificationListener : NotificationListenerService() {
     private companion object {
         const val GMAIL_PACKAGE = "com.google.android.gm"
         const val OUTLOOK_PACKAGE = "com.microsoft.office.outlook"
+
+        private fun sameIdentity(a: String, b: String): Boolean =
+            a.trim().lowercase().replace(Regex("\\s+"), " ") == b.trim().lowercase().replace(Regex("\\s+"), " ")
     }
 }

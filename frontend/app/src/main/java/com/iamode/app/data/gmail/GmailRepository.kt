@@ -1,6 +1,8 @@
 package com.iamode.app.data.gmail
 
 import android.util.Base64
+import androidx.room.withTransaction
+import com.iamode.app.core.database.IAModeDatabase
 import com.iamode.app.core.di.GmailClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -10,6 +12,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import com.iamode.app.core.database.dao.GmailAccountDao
+import com.iamode.app.core.database.dao.JobApplicationDao
+import com.iamode.app.core.database.dao.MailActionDao
+import com.iamode.app.core.database.dao.MailIntelligenceDao
+import com.iamode.app.core.database.dao.MailWorkflowDao
 import com.iamode.app.core.database.entity.GmailAccountEntity
 import com.iamode.app.core.datastore.SeenMessageStore
 import com.iamode.app.core.diagnostics.DiagnosticsLog
@@ -35,6 +41,11 @@ class GmailRepository @Inject constructor(
     private val api: GmailApi,
     private val auth: GmailAuthManager,
     private val accounts: GmailAccountDao,
+    private val database: IAModeDatabase,
+    private val intelligence: MailIntelligenceDao,
+    private val mailActions: MailActionDao,
+    private val workflow: MailWorkflowDao,
+    private val applications: JobApplicationDao,
     private val seen: SeenMessageStore,
     private val notifier: Notifier,
     private val log: DiagnosticsLog,
@@ -50,9 +61,35 @@ class GmailRepository @Inject constructor(
         return email
     }
 
-    suspend fun removeAccount(email: String) {
-        auth.invalidate(email)
-        accounts.delete(email)
+    /** Revokes Google consent where possible, then removes the local account. */
+    suspend fun removeAccount(email: String, deleteLocalData: Boolean = false): Boolean {
+        val revoked = auth.disconnect(email)
+        database.withTransaction {
+            if (deleteLocalData) deleteLocalAccountData(email)
+            accounts.delete(email)
+        }
+        return revoked
+    }
+
+    /**
+     * Deletes only records derived from this Gmail account.  The child records must go first
+     * because mail actions own approvals, audit entries and document candidates.
+     */
+    private suspend fun deleteLocalAccountData(email: String) {
+        val emailIds = intelligence.emailIdsForAccount(email)
+        if (emailIds.isEmpty()) return
+        val applicationIds = applications.applicationIdsForEmails(emailIds)
+        workflow.deleteCandidatesForEmails(emailIds)
+        workflow.deleteSelectionsForEmails(emailIds)
+        mailActions.deleteApprovalsForEmails(emailIds)
+        mailActions.deleteAuditForEmails(emailIds)
+        workflow.deleteOpportunitiesForEmails(emailIds)
+        workflow.deleteCalendarsForEmails(emailIds)
+        workflow.deleteCelebrationsForEmails(emailIds)
+        applications.deleteEventsForEmails(emailIds)
+        if (applicationIds.isNotEmpty()) applications.deleteForEmails(applicationIds, emailIds)
+        mailActions.deleteForEmails(emailIds)
+        intelligence.deleteForAccount(email)
     }
 
     /** New, human-sent inbox mail received after [sinceMillis] (when IA Mode was turned on). */
@@ -207,7 +244,14 @@ class GmailRepository @Inject constructor(
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
-                                log.record("Mail", false, "${account.email}: couldn't fetch ${ref.id.take(12)}")
+                                val reason = when (e) {
+                                    is HttpException -> "HTTP ${e.code()}"
+                                    is java.io.IOException -> "network error"
+                                    else -> e.javaClass.simpleName
+                                }
+                                // IDs and message contents stay private; diagnostics must still tell the
+                                // user whether this is Gmail authorization, quota, or connectivity.
+                                log.record("Mail", false, "${account.email}: Gmail message fetch failed ($reason)")
                                 null
                             }
                         }

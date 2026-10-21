@@ -101,7 +101,9 @@ def test_all_models_down_returns_503(client, fake_llm):
         raise LLMError("down")
 
     fake_llm.generate_json = down
-    assert client.post("/v1/messages/process", json=body(), headers=AUTH).status_code == 503
+    response = client.post("/v1/messages/process", json=body(), headers=AUTH)
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "60"
 
 
 def test_message_text_cannot_break_out_of_conversation_block(client, fake_llm):

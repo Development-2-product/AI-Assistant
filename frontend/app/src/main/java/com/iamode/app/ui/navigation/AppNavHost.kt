@@ -1,8 +1,6 @@
 package com.iamode.app.ui.navigation
 
 import android.net.Uri
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -54,6 +52,7 @@ import com.iamode.app.ui.feature.commitments.CommitmentTrackerScreen
 import com.iamode.app.ui.feature.commitments.CommitmentDetailScreen
 import com.iamode.app.ui.feature.privacy.PrivacyDashboardScreen
 import com.iamode.app.ui.feature.mail.ReplyReviewScreen
+import com.iamode.app.domain.mail.MailTab
 import com.iamode.app.ui.theme.Motion
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -75,7 +74,7 @@ object Routes {
     const val DIAGNOSTICS = "diagnostics"
     const val SUMMARY = "summary/{sessionId}"
     const val MAIL_ACTIONS = "mail-actions"
-    const val MAIL_INTELLIGENCE = "mail-intelligence"
+    const val MAIL_INTELLIGENCE = "mail-intelligence?tab={tab}"
     const val MAIL_DETAIL = "mail/{emailId}"
     const val MAIL_REPLY = "mail-reply/{actionId}"
     const val MAIL_CALENDAR = "mail-calendar/{actionId}"
@@ -89,6 +88,7 @@ object Routes {
     fun mailDetail(emailId: String) = "mail/${Uri.encode(emailId)}"
     fun mailReply(actionId: String) = "mail-reply/$actionId"
     fun mailCalendar(actionId: String) = "mail-calendar/$actionId"
+    fun mailIntelligence(tab: MailTab = MailTab.INBOX) = "mail-intelligence?tab=${tab.name}"
     fun summary(sessionId: String) = "summary/$sessionId"
     fun commitment(id: String) = CommitmentNavigation.route(id)
 
@@ -129,7 +129,25 @@ sealed interface DeepLink {
 
 /** A single, testable destination for every commitment entry point. */
 internal object CommitmentNavigation {
-    fun route(id: String): String = "commitments/${URLEncoder.encode(id, StandardCharsets.UTF_8).replace("+", "%20")}" 
+    /**
+     * Navigation path arguments need RFC 3986 encoding.  Do this without android.net.Uri so it
+     * behaves identically in JVM tests and on device (the Android test stub returns null here).
+     */
+    fun route(id: String): String = "commitments/${encodePathSegment(id)}"
+}
+
+private fun encodePathSegment(value: String): String = buildString {
+    val hex = "0123456789ABCDEF"
+    value.toByteArray(Charsets.UTF_8).forEach { byte ->
+        val code = byte.toInt() and 0xff
+        if ((code in 'a'.code..'z'.code) || (code in 'A'.code..'Z'.code) ||
+            (code in '0'.code..'9'.code) || code in intArrayOf('-'.code, '.'.code, '_'.code, '~'.code)
+        ) {
+            append(code.toChar())
+        } else {
+            append('%').append(hex[code ushr 4]).append(hex[code and 0x0f])
+        }
+    }
 }
 
 internal fun DeepLink.destination(): String? = when (this) {
@@ -236,7 +254,7 @@ fun AppNavHost(onboardingDone: Boolean, deepLink: DeepLink?, onDeepLinkHandled: 
                         openPermissions = { nav.navigate(Routes.PERMISSIONS) },
                         openSummary = { nav.navigate(Routes.summary(it)) },
                         openDiagnostics = { nav.navigate(Routes.DIAGNOSTICS) },
-                        openMail = { nav.navigate(Routes.MAIL_INTELLIGENCE) },
+                        openMail = { nav.navigate(Routes.mailIntelligence()) },
                         openHistory = { nav.navigate(Routes.HISTORY) },
                     )
                 }
@@ -270,7 +288,7 @@ fun AppNavHost(onboardingDone: Boolean, deepLink: DeepLink?, onDeepLinkHandled: 
                         openPermissions = { nav.navigate(Routes.PERMISSIONS) },
                         openDiagnostics = { nav.navigate(Routes.DIAGNOSTICS) },
                         openMailActions = { nav.navigate(Routes.MAIL_ACTIONS) },
-                        openMailIntelligence = { nav.navigate(Routes.MAIL_INTELLIGENCE) },
+                        openMailIntelligence = { nav.navigate(Routes.mailIntelligence()) },
                         openCommitments = { nav.navigate(Routes.COMMITMENTS) },
                         openPrivacy = { nav.navigate(Routes.PRIVACY) },
                     )
@@ -294,8 +312,11 @@ fun AppNavHost(onboardingDone: Boolean, deepLink: DeepLink?, onDeepLinkHandled: 
                         openConversation = { nav.navigate(Routes.conversation(it)) },
                     )
                 }
-                screen(Routes.MAIL_INTELLIGENCE) {
+                screen(Routes.MAIL_INTELLIGENCE, arguments = listOf(navArgument("tab") {
+                    type = NavType.StringType; defaultValue = MailTab.INBOX.name
+                })) { entry ->
                     MailHomeScreen(
+                        initialTab = runCatching { MailTab.valueOf(entry.arguments?.getString("tab").orEmpty()) }.getOrDefault(MailTab.INBOX),
                         onBack = { nav.popBackStack() },
                         openEmail = { nav.navigate(Routes.mailDetail(it)) },
                         openActions = { nav.navigate(Routes.MAIL_ACTIONS) },
@@ -303,6 +324,7 @@ fun AppNavHost(onboardingDone: Boolean, deepLink: DeepLink?, onDeepLinkHandled: 
                         openDocument = { nav.navigate(Routes.mailReply(it)) },
                         openCalendar = { nav.navigate(Routes.mailCalendar(it)) },
                         openApplications = { nav.navigate(Routes.applications()) },
+                        openSettings = { nav.navigate(Routes.SETTINGS) },
                     )
                 }
                 screen(Routes.MAIL_DETAIL, arguments = listOf(navArgument("emailId") { type = NavType.StringType })) {
@@ -325,7 +347,18 @@ fun AppNavHost(onboardingDone: Boolean, deepLink: DeepLink?, onDeepLinkHandled: 
                 screen(Routes.APPLICATIONS, arguments = listOf(navArgument("shared") {
                     type = NavType.StringType; nullable = true; defaultValue = null
                 })) {
-                    ApplicationsScreen(onBack = { nav.popBackStack() }, openApplication = { nav.navigate(Routes.application(it)) })
+                    ApplicationsScreen(
+                        onBack = { nav.popBackStack() },
+                        openApplication = { nav.navigate(Routes.application(it)) },
+                        // These destinations are entered from Mail in the normal flow. Pop back
+                        // to it so bottom navigation never throws a person to the unrelated Home screen.
+                        openInbox = { if (!nav.popBackStack(Routes.MAIL_INTELLIGENCE, inclusive = false)) nav.navigate(Routes.mailIntelligence()) },
+                        openImportant = {
+                            nav.popBackStack(Routes.MAIL_INTELLIGENCE, inclusive = true)
+                            nav.navigate(Routes.mailIntelligence(MailTab.IMPORTANT))
+                        },
+                        openSettings = { nav.navigate(Routes.SETTINGS) },
+                    )
                 }
                 screen(Routes.APPLICATION, arguments = listOf(navArgument("id") { type = NavType.StringType })) {
                     ApplicationDetailScreen(

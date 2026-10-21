@@ -40,6 +40,10 @@ val requestsDebugTask = gradle.startParameter.taskNames.any { it.contains("debug
 val debugBackendUrl = cfg("iamode.backendUrl")
 val releaseBackendUrl = cfg("iamode.backendUrl.release")
 val releasePrivacyPolicyUrl = cfg("iamode.privacyPolicyUrl")
+// Play Integrity App Check is introduced in stages. Keep it off until the
+// Firebase App Check registration has been verified on the exact release
+// signing certificate; backend enforcement must be enabled separately.
+val releaseAppCheckEnabled = cfg("iamode.enableAppCheck.release", "false").equals("true", ignoreCase = true)
 val devToken = cfg("iamode.devToken", "")
 val releaseStoreFile = privateCfg("RELEASE_STORE_FILE")
 val releaseStorePassword = privateCfg("RELEASE_STORE_PASSWORD")
@@ -164,7 +168,7 @@ android {
             // A release APK must use Firebase; without google-services.json it
             // fails sign-in rather than silently sending a dev credential.
             buildConfigField("boolean", "USE_FIREBASE_AUTH", "true")
-            buildConfigField("boolean", "USE_FIREBASE_APP_CHECK", "true")
+            buildConfigField("boolean", "USE_FIREBASE_APP_CHECK", releaseAppCheckEnabled.toString())
             buildConfigField("String", "MSAL_CLIENT_ID", "\"$msalClientId\"")
             buildConfigField("String", "MSAL_SIGNATURE_HASH", "\"$msalHashRelease\"")
             manifestPlaceholders["msalSignatureHash"] = msalHashRelease.ifBlank { "not-configured" }
@@ -183,6 +187,9 @@ android {
         buildConfig = true
     }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    // The app offers in-app language changes. Keep translated resources in the base bundle so a
+    // newly selected language always works offline instead of requiring a Play feature download.
+    bundle { language { enableSplit = false } }
     // MigrationTestHelper reads exported Room schemas from the instrumentation APK assets.
     sourceSets { getByName("androidTest").assets.srcDir("$projectDir/schemas") }
 }

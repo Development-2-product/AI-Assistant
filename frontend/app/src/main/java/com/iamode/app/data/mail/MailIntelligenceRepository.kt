@@ -40,13 +40,8 @@ import com.iamode.app.domain.mail.RankedDocument
 import com.iamode.app.domain.mail.SenderHistory
 import com.iamode.app.domain.repository.SettingsRepository
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -100,8 +95,16 @@ class MailIntelligenceRepository @Inject constructor(
 
     // ---------------- classification (background sync) ----------------
 
-    /** Understands new inbox mail. Returns the actions that an enabled automation rule may run now. */
-    suspend fun sync(limit: Int = 15): List<String> {
+    data class SyncResult(
+        val automaticActionIds: List<String>,
+        val fetchedCount: Int,
+        val understoodCount: Int,
+        /** Provider/network errors should be retried by WorkManager, never amplified into another catch-up batch. */
+        val retryableFailure: Boolean,
+    )
+
+    /** Understands a bounded inbox batch. Small batches make first results visible quickly. */
+    suspend fun sync(limit: Int = 15): SyncResult {
         // Gmail and Outlook share the budget; each email costs at most one AI call.
         val known: suspend (String) -> Boolean = { intelligence.byEmailId(it) != null }
         val gmailFetch = gmail.fetchForIntelligence(limit, newerThanDays = 7, isKnown = known)
@@ -110,38 +113,49 @@ class MailIntelligenceRepository @Inject constructor(
         val auto = mutableListOf<String>()
         val gmailMessageIds = fromGmail.map { it.mail.gmailId }.toSet()
         val failedGmailAccounts = mutableSetOf<String>()
-        var stoppedForQuota = false
-        // Two concurrent model calls reduce a long mailbox queue while staying deliberately
-        // conservative with provider quota. Each successful result is persisted by classify().
-        val outcomes = coroutineScope {
-            val gate = Semaphore(2)
-            batch.map { m -> async {
-                gate.withPermit {
-                    try {
-                        ClassificationOutcome(m, classify(m), null)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        ClassificationOutcome(m, emptyList(), e)
-                    }
-                }
-            } }.awaitAll()
+        val failures = linkedMapOf<String, Int>()
+        var retryableFailure = false
+        val outcomes = mutableListOf<ClassificationOutcome>()
+        // Mail catch-up deliberately stays serial. A single temporary Gemini limit must not
+        // fan out into ten expensive retries, exhaust a free quota, or delay newer mail.
+        for (mail in batch) {
+            val outcome = try {
+                ClassificationOutcome(mail, classify(mail), null)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ClassificationOutcome(mail, emptyList(), e)
+            }
+            outcomes += outcome
+            if (outcome.error.isTransientMailFailure()) {
+                retryableFailure = true
+                break
+            }
         }
         outcomes.forEach { outcome ->
             auto += outcome.actions
             val error = outcome.error ?: return@forEach
             if (outcome.mail.mail.gmailId in gmailMessageIds) failedGmailAccounts += outcome.mail.accountEmail
-            when (error) {
-                is HttpException -> {
-                    log.record("Mail", false, "Understanding an email failed: HTTP ${error.code()}")
-                    if (error.code() == 429) stoppedForQuota = true
-                }
-                else -> log.record("Mail", false, "Understanding an email failed: ${error.javaClass.simpleName}")
+            val reason = when (error) {
+                is HttpException -> "HTTP ${error.code()}"
+                else -> error.javaClass.simpleName
             }
+            failures[reason] = (failures[reason] ?: 0) + 1
         }
-        if (!stoppedForQuota) gmailFetch.checkpoints.filterNot { it.accountEmail in failedGmailAccounts }.forEach { gmail.commitHistory(it) }
-        if (batch.isNotEmpty()) log.record("Mail", true, "Understood ${batch.size} new email(s)")
-        return auto
+        if (!retryableFailure) gmailFetch.checkpoints.filterNot { it.accountEmail in failedGmailAccounts }.forEach { gmail.commitHistory(it) }
+        val understood = outcomes.size - failures.values.sum()
+        if (batch.isNotEmpty()) log.record("Mail", true, "Fetched ${batch.size} new email(s); understanding them now")
+        if (understood > 0) log.record("Mail", true, "Understood $understood new email(s)")
+        failures.forEach { (reason, count) ->
+            log.record("Mail", false, "Couldn't understand $count new email(s): $reason. They will retry.")
+        }
+        return SyncResult(auto, fetchedCount = batch.size, understoodCount = understood, retryableFailure = retryableFailure)
+    }
+
+    private fun Exception?.isTransientMailFailure(): Boolean = when (this) {
+        is java.io.IOException -> true
+        is HttpException -> code() in setOf(408, 429, 500, 502, 503, 504)
+        else -> false
     }
 
     private data class ClassificationOutcome(

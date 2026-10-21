@@ -127,6 +127,8 @@ interface MailIntelligenceDao {
     @Query("UPDATE mail_intelligence SET archived = 1, updatedAt = :now WHERE fromAddress = :address")
     suspend fun archiveFrom(address: String, now: Long)
     @Query("DELETE FROM mail_intelligence WHERE COALESCE(receivedAt, createdAt) < :before") suspend fun deleteOlderThan(before: Long)
+    @Query("SELECT emailId FROM mail_intelligence WHERE accountEmail = :accountEmail") suspend fun emailIdsForAccount(accountEmail: String): List<String>
+    @Query("DELETE FROM mail_intelligence WHERE accountEmail = :accountEmail") suspend fun deleteForAccount(accountEmail: String)
     @Query("DELETE FROM mail_intelligence") suspend fun deleteAll()
 }
 
@@ -151,6 +153,9 @@ interface MailActionDao {
     suspend fun transition(id: String, from: String, to: String, now: Long): Int
     @Query("DELETE FROM mail_approvals") suspend fun deleteAllApprovals()
     @Query("DELETE FROM mail_audit") suspend fun deleteAllAudit()
+    @Query("DELETE FROM mail_approvals WHERE actionId IN (SELECT id FROM mail_actions WHERE emailId IN (:emailIds))") suspend fun deleteApprovalsForEmails(emailIds: List<String>)
+    @Query("DELETE FROM mail_audit WHERE emailId IN (:emailIds) OR actionId IN (SELECT id FROM mail_actions WHERE emailId IN (:emailIds))") suspend fun deleteAuditForEmails(emailIds: List<String>)
+    @Query("DELETE FROM mail_actions WHERE emailId IN (:emailIds)") suspend fun deleteForEmails(emailIds: List<String>)
     @Query("DELETE FROM mail_actions") suspend fun deleteAll()
 }
 

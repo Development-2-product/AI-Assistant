@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
 import okhttp3.Interceptor
 import okhttp3.Response
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,6 +27,7 @@ class AuthTokenProvider @Inject constructor(
     private val server: ServerConfig,
     private val log: DiagnosticsLog,
 ) {
+    private val lastAppCheckFailureAt = AtomicLong(0L)
     val method: AuthMethod
         get() = when {
             BuildConfig.USE_FIREBASE_AUTH && FirebaseApp.getApps(context).isNotEmpty() -> AuthMethod.FIREBASE
@@ -55,8 +57,22 @@ class AuthTokenProvider @Inject constructor(
     suspend fun appCheckToken(): String? {
         if (!BuildConfig.USE_FIREBASE_APP_CHECK || FirebaseApp.getApps(context).isEmpty()) return null
         return runCatching { FirebaseAppCheck.getInstance().getAppCheckToken(false).await().token }
-            .onFailure { error -> log.record("App Check", false, "Token unavailable: ${error.javaClass.simpleName}") }
+            .onFailure { error -> recordAppCheckFailure(error) }
             .getOrNull()
+    }
+
+    /** An unavailable optional attestation must not fill the user's diagnostics on every API call. */
+    private fun recordAppCheckFailure(error: Throwable) {
+        val now = System.currentTimeMillis()
+        val previous = lastAppCheckFailureAt.get()
+        if (now - previous < APP_CHECK_FAILURE_LOG_INTERVAL_MS ||
+            !lastAppCheckFailureAt.compareAndSet(previous, now)
+        ) return
+        log.record("App Check", false, "Token unavailable: ${error.javaClass.simpleName}")
+    }
+
+    private companion object {
+        const val APP_CHECK_FAILURE_LOG_INTERVAL_MS = 6 * 60 * 60 * 1000L
     }
 }
 

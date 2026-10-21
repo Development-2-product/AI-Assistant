@@ -175,7 +175,7 @@ class Haptics(private val view: android.view.View) {
         if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.LONG_PRESS,
     )
     fun tick() = view.performHapticFeedback(
-        if (Build.VERSION.SDK_INT >= 27) HapticFeedbackConstants.KEYBOARD_RELEASE else HapticFeedbackConstants.VIRTUAL_KEY,
+        HapticFeedbackConstants.KEYBOARD_RELEASE,
     )
     fun threshold() = view.performHapticFeedback(
         if (Build.VERSION.SDK_INT >= 34) HapticFeedbackConstants.GESTURE_THRESHOLD_ACTIVATE else HapticFeedbackConstants.CLOCK_TICK,
