@@ -48,6 +48,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -77,6 +78,16 @@ fun ContactsScreen(onBack: () -> Unit, vm: ContactsViewModel = hiltViewModel()) 
     val commitmentCounts by vm.commitmentCounts.collectAsStateWithLifecycle()
     val relationshipInsights by vm.relationshipInsights.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<Contact?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val visibleContacts = remember(contacts, query) {
+        val needle = query.trim()
+        if (needle.isBlank()) contacts else contacts.filter { contact ->
+            contact.displayName.contains(needle, ignoreCase = true) ||
+                contact.phone?.contains(needle, ignoreCase = true) == true ||
+                contact.email?.contains(needle, ignoreCase = true) == true ||
+                contact.relationship.label.contains(needle, ignoreCase = true)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -96,9 +107,20 @@ fun ContactsScreen(onBack: () -> Unit, vm: ContactsViewModel = hiltViewModel()) 
                     tr("and numbers not in your phone count as unknown."),
                 style = MaterialTheme.typography.bodyMedium, color = IAColors.Grey, modifier = Modifier.padding(16.dp),
             )
-            if (contacts.isEmpty()) EmptyState(tr("No labelled contacts"), tr("Add your clients, partner and family."))
-            LazyColumn {
-                items(contacts, key = { it.id }) { c ->
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                label = { Text(tr("Search contacts")) },
+                placeholder = { Text(tr("Name, email, phone or relationship")) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            if (contacts.isEmpty()) {
+                EmptyState(tr("No labelled contacts"), tr("Add your clients, partner and family."))
+            } else if (visibleContacts.isEmpty()) {
+                EmptyState(tr("No contacts found"), tr("Try a different name, email, phone or relationship."))
+            } else LazyColumn {
+                items(visibleContacts, key = { it.id }) { c ->
                     ListItem(
                         headlineContent = { Text(c.displayName) },
                         supportingContent = {

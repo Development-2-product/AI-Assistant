@@ -54,6 +54,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,6 +66,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -161,6 +164,14 @@ fun HomeScreen(
                 }
                 ModeCard(state, compact, onToggle = vm::toggle, onSituation = { showSituationSheet = true },
                     modifier = Modifier.padding(16.dp))
+                HomeActionStrip(
+                    needsYou = state.needsYou.size,
+                    unreadMail = state.unreadMailCount,
+                    alerts = state.alertCount,
+                    openNeedsYou = { scope.launch { pager.animateScrollToPage(HomeTab.entries.indexOf(HomeTab.NEEDS_YOU)) } },
+                    openMail = openMail,
+                    openAlerts = openAlerts,
+                )
                 val last = state.lastSummary
                 AnimatedVisibility(
                     visible = !state.isOn && last != null && last.conversations.isNotEmpty(),
@@ -257,6 +268,41 @@ fun HomeScreen(
                 )
             }
             Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun HomeActionStrip(
+    needsYou: Int,
+    unreadMail: Int,
+    alerts: Int,
+    openNeedsYou: () -> Unit,
+    openMail: () -> Unit,
+    openAlerts: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 0.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        HomeActionTile("Needs you", needsYou, Color(0xFFFFB547), openNeedsYou, Modifier.weight(1f))
+        HomeActionTile("Inbox", unreadMail, Color(0xFF4FA9FF), openMail, Modifier.weight(1f))
+        HomeActionTile("Alerts", alerts, Color(0xFFB57AFF), openAlerts, Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun HomeActionTile(label: String, count: Int, accent: Color, onClick: () -> Unit, modifier: Modifier) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(17.dp),
+        color = accent.copy(alpha = .13f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = .42f)),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(count.toString(), color = accent, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(tr(label), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }

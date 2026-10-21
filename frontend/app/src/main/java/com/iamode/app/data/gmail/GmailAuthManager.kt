@@ -7,7 +7,6 @@ import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.AuthorizationResult
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.auth.api.identity.RevokeAccessRequest
-import com.google.android.gms.common.AccountPicker
 import com.google.android.gms.common.api.Scope
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.tasks.await
@@ -25,22 +24,27 @@ class GmailAuthManager @Inject constructor(@ApplicationContext context: Context)
     private val client = Identity.getAuthorizationClient(context)
     private val cache = ConcurrentHashMap<String, Pair<String, Long>>()
 
-    private fun request(email: String?, scopes: List<Scope>): AuthorizationRequest =
+    private fun request(email: String?, scopes: List<Scope>, selectAccount: Boolean = false): AuthorizationRequest =
         AuthorizationRequest.builder()
             .setRequestedScopes(scopes)
-            .apply { if (email != null) setAccount(Account(email, "com.google")) }
+            .apply {
+                if (email != null) setAccount(Account(email, "com.google"))
+                // Google Identity Services renders the genuine Google account selector and
+                // consent UI. It is distinct from a Gmail grant: a selected account must still
+                // authorize the narrowly-scoped Gmail request below.
+                if (selectAccount) setPrompt(AuthorizationRequest.Prompt.SELECT_ACCOUNT)
+            }
             .build()
 
-    /** Starts the account picker / consent flow. If [AuthorizationResult.hasResolution], launch its pendingIntent. */
-    /** Always select an address first; authorization below remains Google Identity's secure flow. */
-    fun accountPickerIntent(): Intent = AccountPicker.newChooseAccountIntent(
-        AccountPicker.AccountChooserOptions.Builder()
-            .setAllowableAccountsTypes(listOf("com.google"))
-            .setAlwaysShowAccountPicker(true)
-            .build(),
-    )
-
     suspend fun beginAuthorization(email: String): AuthorizationResult = client.authorize(request(email, SCOPES)).await()
+
+    /**
+     * Opens Google Identity Services' native account-selection UI for a new Gmail connection.
+     * The returned access token is still limited to [SCOPES]; neither passwords nor tokens are
+     * exposed to Compose UI or diagnostic logs.
+     */
+    suspend fun beginAuthorizationWithAccountSelection(): AuthorizationResult =
+        client.authorize(request(email = null, scopes = SCOPES, selectAccount = true)).await()
 
     /** Optional, separate consent for Google Drive document search on an already-connected account. */
     suspend fun beginDriveAuthorization(email: String): AuthorizationResult = client.authorize(request(email, DRIVE_SCOPES)).await()

@@ -3,7 +3,6 @@ package com.iamode.app.ui.feature.settings
 import com.iamode.app.core.i18n.tr
 
 import android.app.TimePickerDialog
-import android.accounts.AccountManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.AnimatedVisibility
@@ -95,6 +94,7 @@ fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnost
     val s by vm.state.collectAsStateWithLifecycle()
     val accounts by vm.gmailAccounts.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
+    val gmailConnectionInProgress by vm.gmailConnectionInProgress.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var confirmDelete by remember { mutableStateOf(false) }
     var showScheduleEditor by remember { mutableStateOf(false) }
@@ -107,13 +107,14 @@ fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnost
     val calendarHint = remember(permissionRefresh) { permissionHint(context, AppPermission.CALENDAR) }
     var name by rememberSaveable { mutableStateOf<String?>(null) }
 
+    lateinit var launchGmailAuthorization: (android.app.PendingIntent) -> Unit
     val gmailLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
-        vm.onGmailAuthResult(it.resultCode, it.data)
-    }
-    val gmailAccountPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        vm.onGmailAccountPicked(it.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)) { pending ->
-            gmailLauncher.launch(IntentSenderRequest.Builder(pending.intentSender).build())
+        vm.onGmailAuthResult(it.resultCode, it.data) { pending ->
+            launchGmailAuthorization(pending)
         }
+    }
+    launchGmailAuthorization = { pending ->
+        gmailLauncher.launch(IntentSenderRequest.Builder(pending.intentSender).build())
     }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.messageShown() } }
 
@@ -253,7 +254,8 @@ fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnost
 
             PremiumGmailConnectCard(
                 accounts = accounts,
-                onConnect = { vm.connectGmail { gmailAccountPickerLauncher.launch(it) } },
+                connecting = gmailConnectionInProgress,
+                onConnect = { vm.connectGmail { pending -> gmailLauncher.launch(IntentSenderRequest.Builder(pending.intentSender).build()) } },
                 onRemove = { email -> deleteGmailData = false; gmailToRemove = email },
             )
 
@@ -314,6 +316,7 @@ fun SettingsScreen(onBack: () -> Unit, openPermissions: () -> Unit, openDiagnost
 @Composable
 private fun PremiumGmailConnectCard(
     accounts: List<com.iamode.app.core.database.entity.GmailAccountEntity>,
+    connecting: Boolean,
     onConnect: () -> Unit,
     onRemove: (String) -> Unit,
 ) {
@@ -351,8 +354,8 @@ private fun PremiumGmailConnectCard(
             if (accounts.isEmpty()) {
                 Text(tr("IA Mode reads only the Gmail data you authorize. Messages are organized locally, and sending always requires your approval."),
                     color = Color(0xFFD8E5FF), style = MaterialTheme.typography.bodyMedium)
-                FilledTonalButton(onClick = onConnect, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Filled.Add, null); Spacer(Modifier.padding(horizontal = 4.dp)); Text(tr("Choose a Google account"))
+                FilledTonalButton(onClick = onConnect, enabled = !connecting, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Add, null); Spacer(Modifier.padding(horizontal = 4.dp)); Text(if (connecting) tr("Opening Google…") else tr("Choose a Google account"))
                 }
             } else {
                 accounts.forEach { account ->
@@ -366,14 +369,14 @@ private fun PremiumGmailConnectCard(
                                     color = if (account.needsReauth) Color(0xFFFFCA73) else Color(0xFF8DE9BC), style = MaterialTheme.typography.labelSmall)
                             }
                             if (account.needsReauth) {
-                                TextButton(onClick = onConnect) { Icon(Icons.Filled.Refresh, null); Text(tr("Reconnect")) }
+                                TextButton(onClick = onConnect, enabled = !connecting) { Icon(Icons.Filled.Refresh, null); Text(tr("Reconnect")) }
                             }
                             TextButton(onClick = { onRemove(account.email) }) { Text(tr("Remove"), color = Color(0xFFFFA4A4)) }
                         }
                     }
                 }
-                OutlinedButton(onClick = onConnect, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Filled.Add, null); Spacer(Modifier.padding(horizontal = 4.dp)); Text(tr("Connect another Gmail account"))
+                OutlinedButton(onClick = onConnect, enabled = !connecting, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Filled.Add, null); Spacer(Modifier.padding(horizontal = 4.dp)); Text(if (connecting) tr("Opening Google…") else tr("Connect another Gmail account"))
                 }
             }
             Text(tr("Google’s secure account picker opens next. IA Mode never sees or stores your Google password."),

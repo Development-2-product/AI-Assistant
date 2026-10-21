@@ -5,16 +5,22 @@ import com.iamode.app.core.i18n.tr
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -29,6 +35,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -78,17 +87,16 @@ fun AlertsScreen(onBack: () -> Unit, openConversation: (String) -> Unit, vm: Ale
         )
     }) { padding ->
         if (list.isEmpty()) {
-            Column(Modifier.padding(padding)) { EmptyState(tr("No alerts yet"), tr("Automation activity will appear here.")) }
+            Column(Modifier.fillMaxSize().padding(padding).padding(20.dp)) {
+                AlertOverview(total = 0, attention = 0)
+                EmptyState(tr("No alerts yet"), tr("Automation activity and recovery steps will appear here when needed."))
+            }
             return@Scaffold
         }
         Column(Modifier.fillMaxSize().padding(padding).readableWidth()) {
-            Text(
-                tr("Privacy-safe activity and recovery. Open a conversation to review its actual draft or message."),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            )
-            androidx.compose.foundation.layout.Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            AlertOverview(total = list.size, attention = list.count { AutomationAudit.present(it).needsAttention })
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 AuditFilter.entries.forEach { option ->
@@ -99,24 +107,70 @@ fun AlertsScreen(onBack: () -> Unit, openConversation: (String) -> Unit, vm: Ale
                 EmptyState(tr("Nothing here"), tr("No automation activity matches this filter."))
                 return@Column
             }
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 items(displayed, key = { it.id }) { a ->
-                    val item = AutomationAudit.present(a)
-                    ListItem(
-                        leadingContent = { Text(icon(a.kind), style = MaterialTheme.typography.titleMedium) },
-                        headlineContent = { Text(item.title) },
-                        supportingContent = { Text(item.summary, maxLines = 2) },
-                        trailingContent = {
-                            Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
-                                Text(time(a.createdAt), style = MaterialTheme.typography.labelSmall)
-                                item.actionLabel?.takeIf { a.conversationId != null }?.let { label ->
-                                    TextButton(onClick = { a.conversationId?.let(openConversation) }) { Text(tr(label)) }
-                                }
-                            }
-                        },
-                        modifier = Modifier.animateItem().clickable(enabled = a.conversationId != null) { a.conversationId?.let(openConversation) },
-                    )
-                    HorizontalDivider(Modifier.animateItem())
+                    AlertCard(a, onOpenConversation = openConversation, modifier = Modifier.animateItem())
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlertOverview(total: Int, attention: Int) {
+    Card(
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF10253F)),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = if (attention > 0) Color(0xFFFFB84D).copy(alpha = .18f) else Color(0xFF3E9CFF).copy(alpha = .18f))) {
+                Text(if (attention > 0) "!" else "✓", color = if (attention > 0) Color(0xFFFFC867) else Color(0xFF72B9FF), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 13.dp, vertical = 8.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(tr("Activity center"), color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (attention > 0) tr("%1\$s item(s) need your review", attention) else tr("All caught up — %1\$s recent activity items", total),
+                    color = Color(0xFFBED4F2), style = MaterialTheme.typography.bodySmall,
+                )
+                Text(tr("Privacy-safe records only. Open a conversation to review any draft."), color = Color(0xFF829ABA), style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlertCard(alert: Alert, onOpenConversation: (String) -> Unit, modifier: Modifier) {
+    val presentation = AutomationAudit.present(alert)
+    val needsAttention = presentation.needsAttention
+    val accent = if (needsAttention) Color(0xFFFFA847) else Color(0xFF49B6F2)
+    Card(
+        modifier = modifier.fillMaxWidth().clickable(enabled = alert.conversationId != null) { alert.conversationId?.let(onOpenConversation) },
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Row(Modifier.padding(15.dp), verticalAlignment = Alignment.Top) {
+            Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = accent.copy(alpha = .16f))) {
+                Text(icon(alert.kind), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(10.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(presentation.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Text(time(alert.createdAt), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(presentation.summary, maxLines = 2, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (needsAttention) tr("Needs attention") else tr("Handled"), color = accent, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                    presentation.actionLabel?.takeIf { alert.conversationId != null }?.let { label ->
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { alert.conversationId?.let(onOpenConversation) }) { Text(tr(label)) }
+                    }
                 }
             }
         }

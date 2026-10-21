@@ -3,7 +3,13 @@ package com.iamode.app.ui.feature.mail
 import com.iamode.app.core.i18n.tr
 
 import android.content.Context
+import android.content.Intent
+import android.app.Activity
+import android.app.PendingIntent
 import android.text.format.DateUtils
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -111,6 +117,8 @@ import com.iamode.app.data.mail.MailIntelligenceRepository
 import com.iamode.app.data.mail.MailItem
 import com.iamode.app.data.mail.MailSyncWorker
 import com.iamode.app.data.mail.MailSyncStatusStore
+import com.iamode.app.data.gmail.GmailRepository
+import com.iamode.app.data.gmail.GmailAuthManager
 import com.iamode.app.domain.mail.MailActionType
 import com.iamode.app.domain.mail.MailCategory
 import com.iamode.app.domain.mail.MailTab
@@ -126,9 +134,12 @@ import com.iamode.app.ui.components.sharedTransition
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 
 data class MailHomeState(
@@ -150,10 +161,16 @@ data class MailSyncUiState(
 @HiltViewModel
 class MailHomeViewModel @Inject constructor(
     private val repo: MailIntelligenceRepository,
+    private val gmail: GmailRepository,
+    private val gmailAuth: GmailAuthManager,
     gmailAccounts: GmailAccountDao,
     syncStatus: MailSyncStatusStore,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
+    private val _message = MutableStateFlow<String?>(null)
+    val message = _message.asStateFlow()
+    private val _gmailConnectionInProgress = MutableStateFlow(false)
+    val gmailConnectionInProgress = _gmailConnectionInProgress.asStateFlow()
     val state = combine(repo.mail, repo.pendingActions, repo.allCalendars) { items, actions, events ->
         MailHomeState(
             items = items,
@@ -194,6 +211,68 @@ class MailHomeViewModel @Inject constructor(
     fun markAllRead(done: (String) -> Unit = {}) = viewModelScope.launch {
         done(repo.markAllRead(state.value.items.filter { !it.entity.archived && it.entity.viewedAt == null }.map { it.emailId }))
     }
+    fun removeGmail(email: String) = viewModelScope.launch { gmail.removeAccount(email) }
+    fun messageShown() { _message.value = null }
+
+    /** Uses Google Identity Services' native picker, followed by the existing Gmail consent flow. */
+    fun connectGmail(launch: (PendingIntent) -> Unit) {
+        if (_gmailConnectionInProgress.value) return
+        viewModelScope.launch {
+            _gmailConnectionInProgress.value = true
+            try {
+                val awaitingResult = finishGmailAuthorization(gmailAuth.beginAuthorizationWithAccountSelection(), launch)
+                if (!awaitingResult) _gmailConnectionInProgress.value = false
+            } catch (e: CancellationException) {
+                _gmailConnectionInProgress.value = false
+                throw e
+            } catch (e: Exception) {
+                _gmailConnectionInProgress.value = false
+                _message.value = tr("Google account selection was cancelled or unavailable")
+            }
+        }
+    }
+
+    fun onGmailAuthResult(resultCode: Int, data: Intent?, launch: (PendingIntent) -> Unit) = viewModelScope.launch {
+        try {
+            if (data == null) {
+                _message.value = if (resultCode == Activity.RESULT_CANCELED) tr("Gmail connection was cancelled")
+                else tr("Google returned no Gmail authorization result")
+                _gmailConnectionInProgress.value = false
+                return@launch
+            }
+            val awaitingResult = finishGmailAuthorization(gmailAuth.resultFromIntent(data), launch)
+            if (!awaitingResult) _gmailConnectionInProgress.value = false
+        } catch (e: CancellationException) {
+            _gmailConnectionInProgress.value = false
+            throw e
+        } catch (e: Exception) {
+            _gmailConnectionInProgress.value = false
+            _message.value = tr("Gmail authorization failed. Check the Android OAuth client, Gmail API and test user.")
+        }
+    }
+
+    private suspend fun finishGmailAuthorization(
+        result: com.google.android.gms.auth.api.identity.AuthorizationResult,
+        launch: (PendingIntent) -> Unit,
+    ): Boolean {
+        val pending = result.pendingIntent
+        when {
+            result.hasResolution() && pending != null -> {
+                launch(pending)
+                return true
+            }
+            result.accessToken != null -> {
+                val email = gmail.addAccount(requireNotNull(result.accessToken))
+                MailSyncWorker.syncNow(context, limit = 40)
+                _message.value = tr("Connected %1\$s. Checking up to 40 recent emails now.", email)
+                return false
+            }
+            else -> {
+                _message.value = tr("Google did not issue Gmail access. Check the Android OAuth client, Gmail API and test user.")
+                return false
+            }
+        }
+    }
 }
 
 private val tabs = listOf(
@@ -213,10 +292,24 @@ fun MailHomeScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     val gmailAccounts by vm.gmailAccounts.collectAsStateWithLifecycle()
     val sync by vm.sync.collectAsStateWithLifecycle()
+    val connectionMessage by vm.message.collectAsStateWithLifecycle()
+    val gmailConnectionInProgress by vm.gmailConnectionInProgress.collectAsStateWithLifecycle()
     val pager = rememberPagerState { tabs.size }
     val scope = rememberCoroutineScope()
     LaunchedEffect(initialTab) { pager.scrollToPage(tabs.indexOf(initialTab).coerceAtLeast(0)) }
     val snackbar = remember { SnackbarHostState() }
+    lateinit var launchGmailAuthorization: (PendingIntent) -> Unit
+    val gmailLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
+        vm.onGmailAuthResult(it.resultCode, it.data) { pending ->
+            launchGmailAuthorization(pending)
+        }
+    }
+    launchGmailAuthorization = { pending ->
+        gmailLauncher.launch(IntentSenderRequest.Builder(pending.intentSender).build())
+    }
+    LaunchedEffect(connectionMessage) {
+        connectionMessage?.let { snackbar.showSnackbar(it); vm.messageShown() }
+    }
     val seen = remember { mutableSetOf<String>() }
     val haptics = rememberHaptics()
     var showMarkAllDialog by remember { mutableStateOf(false) }
@@ -253,7 +346,10 @@ fun MailHomeScreen(
                 onSearchChange = { searchQuery = it },
                 onMarkAllRead = { showMarkAllDialog = true },
                 onActions = openActions,
-                onManageAccounts = openSettings,
+                onAddAccount = {
+                    if (!gmailConnectionInProgress) vm.connectGmail(launchGmailAuthorization)
+                },
+                onRemoveAccount = vm::removeGmail,
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -467,7 +563,8 @@ private fun PremiumMailHeader(
     onSearchChange: (String) -> Unit,
     onMarkAllRead: () -> Unit,
     onActions: () -> Unit,
-    onManageAccounts: () -> Unit,
+    onAddAccount: () -> Unit,
+    onRemoveAccount: (String) -> Unit,
 ) {
     var accountMenu by remember { mutableStateOf(false) }
     val activeEmail = accounts.firstOrNull()?.email.orEmpty()
@@ -494,7 +591,7 @@ private fun PremiumMailHeader(
                     }
                 }
                 Box {
-                    IconButton(onClick = { accountMenu = true }, enabled = activeEmail.isNotBlank()) {
+                    IconButton(onClick = { accountMenu = true }) {
                         AccountAvatar(activeEmail, size = 38)
                     }
                     AccountMenu(
@@ -502,7 +599,8 @@ private fun PremiumMailHeader(
                         activeEmail = activeEmail,
                         accounts = accounts,
                         onDismiss = { accountMenu = false },
-                        onManageAccounts = { accountMenu = false; onManageAccounts() },
+                        onAddAccount = { accountMenu = false; onAddAccount() },
+                        onRemoveAccount = { email -> accountMenu = false; onRemoveAccount(email) },
                     )
                 }
             }

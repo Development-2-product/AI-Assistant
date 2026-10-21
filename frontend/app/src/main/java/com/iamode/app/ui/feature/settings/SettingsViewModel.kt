@@ -4,8 +4,8 @@ import com.iamode.app.core.i18n.tr
 
 import android.app.PendingIntent
 import android.app.Activity
-import android.content.Intent
 import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.iamode.app.core.database.entity.GmailAccountEntity
@@ -59,33 +59,32 @@ class SettingsViewModel @Inject constructor(
 
     private val _message = MutableStateFlow<String?>(null)
     val message = _message.asStateFlow()
+    private val _gmailConnectionInProgress = MutableStateFlow(false)
+    val gmailConnectionInProgress = _gmailConnectionInProgress.asStateFlow()
 
     fun update(f: (UserSettings) -> UserSettings) {
         viewModelScope.launch { settings.update(f) }
     }
 
-    /** Always opens the device's Google account list before requesting Gmail authorization. */
-    fun connectGmail(chooseAccount: (Intent) -> Unit) = chooseAccount(gmailAuth.accountPickerIntent())
-
-    /** Starts Google's consent flow for the address the person selected. */
-    fun onGmailAccountPicked(email: String?, launch: (PendingIntent) -> Unit) = viewModelScope.launch {
-        if (email.isNullOrBlank()) {
-            _message.value = tr("Gmail connection was cancelled")
-            return@launch
-        }
-        try {
-            val result = gmailAuth.beginAuthorization(email)
-            val pending = result.pendingIntent
-            if (result.hasResolution() && pending != null) launch(pending)
-            else result.accessToken?.let { addAccount(it) }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            _message.value = tr("Couldn't start Google sign-in")
+    /** Starts Google Identity Services' native account selector, followed by Gmail consent when needed. */
+    fun connectGmail(launch: (PendingIntent) -> Unit) {
+        if (_gmailConnectionInProgress.value) return
+        viewModelScope.launch {
+            _gmailConnectionInProgress.value = true
+            try {
+                val awaitingResult = finishAuthorization(gmailAuth.beginAuthorizationWithAccountSelection(), launch)
+                if (!awaitingResult) _gmailConnectionInProgress.value = false
+            } catch (e: CancellationException) {
+                _gmailConnectionInProgress.value = false
+                throw e
+            } catch (e: Exception) {
+                _gmailConnectionInProgress.value = false
+                _message.value = tr("Google account selection was cancelled or unavailable")
+            }
         }
     }
 
-    fun onGmailAuthResult(resultCode: Int, data: Intent?) = viewModelScope.launch {
+    fun onGmailAuthResult(resultCode: Int, data: Intent?, launch: (PendingIntent) -> Unit) = viewModelScope.launch {
         try {
             if (data == null) {
                 _message.value = if (resultCode == Activity.RESULT_CANCELED) {
@@ -93,15 +92,38 @@ class SettingsViewModel @Inject constructor(
                 } else {
                     tr("Google returned no Gmail authorization result")
                 }
+                _gmailConnectionInProgress.value = false
                 return@launch
             }
-            val token = gmailAuth.resultFromIntent(data).accessToken
-            if (token != null) addAccount(token) else _message.value =
-                tr("Google did not issue Gmail access. Check the Android OAuth client, Gmail API and test user.")
+            val awaitingResult = finishAuthorization(gmailAuth.resultFromIntent(data), launch)
+            if (!awaitingResult) _gmailConnectionInProgress.value = false
         } catch (e: CancellationException) {
+            _gmailConnectionInProgress.value = false
             throw e
         } catch (e: Exception) {
+            _gmailConnectionInProgress.value = false
             _message.value = tr("Gmail authorization failed. Check the Android OAuth client, Gmail API and test user.")
+        }
+    }
+
+    private suspend fun finishAuthorization(
+        result: com.google.android.gms.auth.api.identity.AuthorizationResult,
+        launch: (PendingIntent) -> Unit,
+    ): Boolean {
+        val pending = result.pendingIntent
+        when {
+            result.hasResolution() && pending != null -> {
+                launch(pending)
+                return true
+            }
+            result.accessToken != null -> {
+                addAccount(requireNotNull(result.accessToken))
+                return false
+            }
+            else -> {
+                _message.value = tr("Google did not issue Gmail access. Check the Android OAuth client, Gmail API and test user.")
+                return false
+            }
         }
     }
 

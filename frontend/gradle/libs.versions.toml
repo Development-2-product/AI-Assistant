@@ -1,8 +1,8 @@
 [versions]
 # API 36 is supported by AGP 8.10.x (Gradle 8.11.1 is already pinned by the wrapper).
 agp = "8.10.1"
-kotlin = "2.1.0"
-ksp = "2.1.0-1.0.29"
+kotlin = "2.1.20"
+ksp = "2.1.20-1.0.32"
 hilt = "2.54"
 androidxHilt = "1.2.0"
 coreKtx = "1.15.0"

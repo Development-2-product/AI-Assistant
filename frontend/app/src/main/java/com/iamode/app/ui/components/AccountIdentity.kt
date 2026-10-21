@@ -12,7 +12,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ManageAccounts
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -21,7 +22,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -69,8 +76,10 @@ fun AccountMenu(
     activeEmail: String,
     accounts: List<GmailAccountEntity>,
     onDismiss: () -> Unit,
-    onManageAccounts: () -> Unit,
+    onAddAccount: () -> Unit,
+    onRemoveAccount: (String) -> Unit,
 ) {
+    var removalCandidate by remember { mutableStateOf<String?>(null) }
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
@@ -78,43 +87,70 @@ fun AccountMenu(
         containerColor = Color(0xFF10243D),
         tonalElevation = 8.dp,
     ) {
-        Column(Modifier.width(300.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AccountAvatar(activeEmail, size = 58)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(activeEmail.substringBefore('@').ifBlank { "IA Mode account" }, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(activeEmail.ifBlank { "No Gmail account connected" }, color = Color(0xFFB7C8E9), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("Connected", color = Color(0xFF66E2A5), style = MaterialTheme.typography.labelSmall)
+        if (accounts.isEmpty()) {
+            Column(Modifier.width(300.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AccountAvatar("", size = 58)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("No Gmail account", color = Color.White, fontWeight = FontWeight.SemiBold)
+                        Text("Connect an account to organise your mail", color = Color(0xFFB7C8E9), style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
-        }
-        if (accounts.size > 1) {
             HorizontalDivider(color = Color.White.copy(alpha = .12f))
-            accounts.forEach { account ->
-                DropdownMenuItem(
-                    text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            AccountAvatar(account.email, size = 36)
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(account.email, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(if (account.needsReauth) "Reconnect required" else "Connected", color = if (account.needsReauth) Color(0xFFFFC46B) else Color(0xFF9FBCE8), style = MaterialTheme.typography.labelSmall)
-                            }
-                            if (account.email == activeEmail) Icon(Icons.Filled.Verified, "Active account", tint = Color(0xFF5DAEFF), modifier = Modifier.size(18.dp))
-                        }
-                    },
-                    // IA Mode synchronizes authorized Gmail accounts together; selecting an entry
-                    // cannot honestly switch a server-side mailbox context, so it opens management.
-                    onClick = onManageAccounts,
-                )
+            DropdownMenuItem(
+                text = { Text("Add Gmail account", color = Color.White) },
+                leadingIcon = { Icon(Icons.Filled.Add, null, tint = Color(0xFF85BCFF)) },
+                onClick = { onDismiss(); onAddAccount() },
+            )
+        } else {
+            Column(Modifier.width(300.dp).padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AccountAvatar(activeEmail, size = 58)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(activeEmail.substringBefore('@').ifBlank { "IA Mode account" }, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(activeEmail, color = Color(0xFFB7C8E9), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Connected", color = Color(0xFF66E2A5), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
             }
+            if (accounts.size > 1) {
+                HorizontalDivider(color = Color.White.copy(alpha = .12f))
+                accounts.filter { it.email != activeEmail }.forEach { account ->
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                AccountAvatar(account.email, size = 36)
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(account.email, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(if (account.needsReauth) "Reconnect required" else "Connected", color = if (account.needsReauth) Color(0xFFFFC46B) else Color(0xFF9FBCE8), style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        },
+                        onClick = { removalCandidate = account.email; onDismiss() },
+                    )
+                }
+            }
+            HorizontalDivider(color = Color.White.copy(alpha = .12f))
+            DropdownMenuItem(
+                text = { Text("Remove account", color = Color(0xFFFFB4AB)) },
+                leadingIcon = { Icon(Icons.Filled.DeleteOutline, null, tint = Color(0xFFFFB4AB)) },
+                onClick = { removalCandidate = activeEmail; onDismiss() },
+            )
         }
-        HorizontalDivider(color = Color.White.copy(alpha = .12f))
-        DropdownMenuItem(
-            text = { Text("Manage connected accounts", color = Color.White) },
-            leadingIcon = { Icon(Icons.Filled.ManageAccounts, null, tint = Color(0xFF85BCFF)) },
-            onClick = onManageAccounts,
+    }
+    removalCandidate?.let { email ->
+        AlertDialog(
+            onDismissRequest = { removalCandidate = null },
+            title = { Text("Remove $email?") },
+            text = { Text("IA Mode will disconnect this Gmail account and revoke its Gmail permission. Your Gmail mailbox is not deleted.") },
+            confirmButton = {
+                TextButton(onClick = { removalCandidate = null; onRemoveAccount(email) }) { Text("Remove") }
+            },
+            dismissButton = { TextButton(onClick = { removalCandidate = null }) { Text("Cancel") } },
         )
     }
 }

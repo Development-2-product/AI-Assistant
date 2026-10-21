@@ -80,6 +80,7 @@ import androidx.lifecycle.viewModelScope
 import com.iamode.app.core.database.entity.JobApplicationEntity
 import com.iamode.app.core.database.dao.GmailAccountDao
 import com.iamode.app.data.jobs.JobTrackerRepository
+import com.iamode.app.data.gmail.GmailRepository
 import com.iamode.app.domain.jobs.ApplicationSource
 import com.iamode.app.domain.jobs.ApplicationStage
 import com.iamode.app.domain.jobs.Funnel
@@ -108,6 +109,7 @@ class ApplicationsViewModel @Inject constructor(
     saved: SavedStateHandle,
     private val tracker: JobTrackerRepository,
     gmailAccountDao: GmailAccountDao,
+    private val gmail: GmailRepository,
 ) : ViewModel() {
     val applications = tracker.applications.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val funnel = tracker.funnel.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -122,6 +124,7 @@ class ApplicationsViewModel @Inject constructor(
         viewModelScope.launch {
             then(tracker.addManual(company, role, url, if (fromShare) ApplicationSource.SHARED_LINK else ApplicationSource.MANUAL, stage, location))
         }
+    fun removeGmail(email: String) = viewModelScope.launch { gmail.removeAccount(email) }
 }
 
 private enum class Filter(val label: String, val stages: Set<ApplicationStage>) {
@@ -166,7 +169,8 @@ fun ApplicationsScreen(
                 onBack = onBack,
                 onToggleSearch = { searchOpen = !searchOpen; if (!searchOpen) searchQuery = "" },
                 onSearchChange = { searchQuery = it },
-                onManageAccounts = openSettings,
+                onAddAccount = openSettings,
+                onRemoveAccount = vm::removeGmail,
             )
         },
         bottomBar = { CareerBottomNavigation(openInbox, openImportant, openSettings) },
@@ -245,7 +249,8 @@ private fun CareerTopBar(
     onBack: () -> Unit,
     onToggleSearch: () -> Unit,
     onSearchChange: (String) -> Unit,
-    onManageAccounts: () -> Unit,
+    onAddAccount: () -> Unit,
+    onRemoveAccount: (String) -> Unit,
 ) {
     var accountMenu by remember { mutableStateOf(false) }
     Surface(color = careerNavy) {
@@ -255,7 +260,7 @@ private fun CareerTopBar(
                 Text(tr("Career"), color = Color.White, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 IconButton(onClick = onToggleSearch) { Icon(Icons.Filled.Search, tr("Search applications"), tint = Color.White) }
                 Box(Modifier.padding(start = 4.dp)) {
-                    IconButton(onClick = { accountMenu = true }, enabled = accountEmail.isNotBlank()) {
+                    IconButton(onClick = { accountMenu = true }) {
                         AccountAvatar(accountEmail, size = 38)
                     }
                     AccountMenu(
@@ -263,7 +268,8 @@ private fun CareerTopBar(
                         activeEmail = accountEmail,
                         accounts = accounts,
                         onDismiss = { accountMenu = false },
-                        onManageAccounts = { accountMenu = false; onManageAccounts() },
+                        onAddAccount = { accountMenu = false; onAddAccount() },
+                        onRemoveAccount = { email -> accountMenu = false; onRemoveAccount(email) },
                     )
                 }
             }

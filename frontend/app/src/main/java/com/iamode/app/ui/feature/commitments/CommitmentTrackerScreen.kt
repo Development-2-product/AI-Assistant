@@ -5,11 +5,22 @@ import android.app.TimePickerDialog
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -78,15 +89,115 @@ import javax.inject.Inject
         onReady(conversation.id)
     }
 }
-@OptIn(ExperimentalMaterial3Api::class) @Composable fun CommitmentTrackerScreen(onBack: () -> Unit, openDetail: (String) -> Unit, vm: CommitmentViewModel = hiltViewModel()) {
-    val items by vm.items.collectAsStateWithLifecycle(); var editing by remember { mutableStateOf<ChatCommitmentEntity?>(null) }; val active=items.filter { it.status !in setOf("COMPLETED","DISMISSED") }
-    Scaffold(topBar={ TopAppBar(title={Text(tr("Commitments"))}, navigationIcon={IconButton(onClick=onBack){Icon(Icons.AutoMirrored.Filled.ArrowBack,tr("Back"))}}) }) { p -> LazyColumn(Modifier.fillMaxSize().padding(p), contentPadding=PaddingValues(16.dp), verticalArrangement=Arrangement.spacedBy(10.dp)) {
-        item { Text(tr("Promises detected from chats stay encrypted on this phone. Nothing is sent automatically."), style=MaterialTheme.typography.bodySmall) }
-        if(active.isEmpty()) item { EmptyState(tr("No commitments yet"),tr("When IA Mode detects a future commitment, it will appear here for review.")) }
-        items(active,key={it.id}) { x -> CommitmentCard(x,{ openDetail(x.id) },{editing=x},{vm.confirm(x)},{vm.complete(x)},{vm.snooze(x)},{vm.dismiss(x)},{vm.delete(x)}) }
-    } }; editing?.let { x -> EditCommitment(x,{editing=null}) { text, dueAt, reminderAt -> vm.edit(x, text, dueAt, reminderAt); editing=null } }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CommitmentTrackerScreen(onBack: () -> Unit, openDetail: (String) -> Unit, vm: CommitmentViewModel = hiltViewModel()) {
+    val items by vm.items.collectAsStateWithLifecycle()
+    var editing by remember { mutableStateOf<ChatCommitmentEntity?>(null) }
+    val active = items.filter { it.status !in setOf("COMPLETED", "DISMISSED") }
+    val reviewCount = active.count { it.status == "REVIEW_NEEDED" }
+
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text(tr("Commitments")) },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, tr("Back")) } },
+        )
+    }) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item(key = "commitment-overview") {
+                Card(
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                ) {
+                    Column(
+                        Modifier.background(Brush.linearGradient(listOf(Color(0xFF24206F), Color(0xFF0A3C55))))
+                            .padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(tr("Keep every promise in view"), color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                        Text(tr("%1\$s active · %2\$s need review", active.size, reviewCount), color = Color(0xFFC8DAFF), style = MaterialTheme.typography.bodyMedium)
+                        Text(tr("Detected commitments stay on this phone. Nothing is sent automatically."), color = Color(0xFFAFC8E8), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+            if (active.isEmpty()) {
+                item(key = "empty") { EmptyState(tr("No commitments yet"), tr("When IA Mode detects a future commitment, it will appear here for review.")) }
+            }
+            items(active, key = { it.id }) { item ->
+                CommitmentCard(
+                    item = item,
+                    onOpen = { openDetail(item.id) },
+                    onEdit = { editing = item },
+                    onConfirm = { vm.confirm(item) },
+                    onComplete = { vm.complete(item) },
+                    onSnooze = { vm.snooze(item) },
+                )
+            }
+        }
+    }
+    editing?.let { item ->
+        EditCommitment(item, { editing = null }) { text, dueAt, reminderAt ->
+            vm.edit(item, text, dueAt, reminderAt)
+            editing = null
+        }
+    }
 }
-@Composable private fun CommitmentCard(x:ChatCommitmentEntity,onOpen:()->Unit,onEdit:()->Unit,onConfirm:()->Unit,onComplete:()->Unit,onSnooze:()->Unit,onDismiss:()->Unit,onDelete:()->Unit) { Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(7.dp)) { TextButton(onClick=onOpen, contentPadding=PaddingValues(0.dp)) { Text(x.commitmentText,style=MaterialTheme.typography.titleMedium) }; Text(if(x.needsConfirmation) tr("Date needs confirmation") else dueLabel(x.dueAt),style=MaterialTheme.typography.bodySmall); Text(x.explanation.orEmpty(),style=MaterialTheme.typography.bodySmall); Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){ if(x.status=="REVIEW_NEEDED") Button(onClick=onConfirm){Text(tr("Confirm"))} else Button(onClick=onComplete){Text(tr("Complete"))}; OutlinedButton(onClick=onEdit){Text(tr("Edit"))}; OutlinedButton(onClick=onSnooze){Text(tr("Snooze 1 hour"))} }; Row { TextButton(onClick=onDismiss){Text(tr("Dismiss"))}; TextButton(onClick=onDelete){Text(tr("Delete"))} } } } }
+
+@Composable
+private fun CommitmentCard(
+    item: ChatCommitmentEntity,
+    onOpen: () -> Unit,
+    onEdit: () -> Unit,
+    onConfirm: () -> Unit,
+    onComplete: () -> Unit,
+    onSnooze: () -> Unit,
+) {
+    val overdue = isOverdue(item)
+    val needsReview = item.status == "REVIEW_NEEDED"
+    val accent = when {
+        overdue -> Color(0xFFFF6578)
+        needsReview -> Color(0xFFFFB84D)
+        else -> Color(0xFF51B6FF)
+    }
+    Card(
+        onClick = onOpen,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = accent.copy(alpha = .17f))) {
+                    Icon(
+                        if (needsReview) Icons.Filled.Schedule else Icons.Filled.CheckCircle,
+                        null,
+                        tint = accent,
+                        modifier = Modifier.padding(10.dp).size(22.dp),
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(item.commitmentText, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                    Text(if (item.needsConfirmation) tr("Date needs confirmation") else dueLabel(item.dueAt), style = MaterialTheme.typography.bodySmall, color = accent)
+                }
+                TextButton(onClick = onOpen) { Text(tr("Details")) }
+            }
+            item.explanation?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2) }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .55f))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = if (needsReview) onConfirm else onComplete, modifier = Modifier.weight(1f)) {
+                    Text(if (needsReview) tr("Confirm") else tr("Complete"))
+                }
+                OutlinedButton(onClick = onEdit) { Icon(Icons.Filled.Edit, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text(tr("Edit")) }
+            }
+            TextButton(onClick = onSnooze, modifier = Modifier.fillMaxWidth()) { Text(tr("Snooze for 1 hour")) }
+        }
+    }
+}
 private enum class ReminderPreset(val label: String, val minutesBefore: Long?) {
     NONE("No reminder", null), AT_DUE_TIME("At due time", 0), ONE_HOUR_BEFORE("1 hour before", 60), ONE_DAY_BEFORE("1 day before", 24 * 60);
 }
